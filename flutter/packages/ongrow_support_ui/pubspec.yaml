@@ -1,0 +1,17 @@
+name: ongrow_support_ui
+description: Shared OnGROW Support Desk presentation layer.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_svg: ^2.0.5
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/ongrow-logo.svg

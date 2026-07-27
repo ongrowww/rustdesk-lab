@@ -109,6 +109,8 @@ dependencies:
   xterm: 4.0.0
   sqflite: 2.2.0
   google_fonts: ^6.2.1
+  ongrow_support_ui:
+    path: packages/ongrow_support_ui
   vector_math: ^2.1.4
 
 dev_dependencies:
