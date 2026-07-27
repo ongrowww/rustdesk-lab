@@ -16,6 +16,7 @@ cert.pfx
 *.bak
 *png
 *svg
+!flutter/assets/ongrow-logo.svg
 *jpg
 sciter.dll
 **pdb
