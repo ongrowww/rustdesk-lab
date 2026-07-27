@@ -1,4 +1,4 @@
-name: OnGROW Lab - macOS ARM64 Baseline
+name: OnGROW Support Desk - macOS ARM64 Lab
 
 on:
   workflow_dispatch:
@@ -7,11 +7,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ongrow-lab-macos-arm64-baseline
+  group: ongrow-support-desk-macos-arm64-lab
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: "6c578292e8ebbbec708b76986ba8c4bc7c509747"
   VERSION: "1.4.9"
   BRIDGE_RUST_VERSION: "1.75"
   MAC_RUST_VERSION: "1.81"
@@ -30,14 +29,14 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
 
       - name: Verify source revision
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
 
       - name: Install prerequisites
@@ -137,16 +136,25 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ env.SOURCE_SHA }}
+          ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
 
       - name: Verify source revision and runner architecture
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(uname -m)" = "arm64"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
+
+      - name: Apply OnGROW branding patch
+        shell: bash
+        run: |
+          git -C libs/hbb_common apply \
+            "$GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
+          grep -Fq \
+            'RwLock::new("OnGROW Support Desk".to_owned())' \
+            libs/hbb_common/src/config.rs
 
       - name: Install build runtime
         run: |
@@ -252,20 +260,34 @@ jobs:
       - name: Verify app bundle and architecture
         shell: bash
         run: |
-          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
           test -d "$RUSTDESK_APP_PATH"
+          test "$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+              "$RUSTDESK_APP_PATH/Contents/Info.plist"
+          )" = "de.ongrow.supportdesk"
+          test "$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' \
+              "$RUSTDESK_APP_PATH/Contents/Info.plist"
+          )" = "OnGROW Support Desk"
+          test "$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' \
+              "$RUSTDESK_APP_PATH/Contents/Info.plist"
+          )" = "ongrow-support"
           RUSTDESK_EXECUTABLE="$(
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
               "$RUSTDESK_APP_PATH/Contents/Info.plist"
           )"
+          test "$RUSTDESK_EXECUTABLE" = "OnGROW Support Desk"
           test -x "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE"
+          test -s "$RUSTDESK_APP_PATH/Contents/Resources/AppIcon.icns"
           file "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
             | grep -q "arm64"
 
       - name: Ad-hoc sign and verify app bundle
         shell: bash
         run: |
-          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
           RUSTDESK_SERVICE_PATH="$RUSTDESK_APP_PATH/Contents/MacOS/service"
           test -x "$RUSTDESK_SERVICE_PATH"
           codesign \
@@ -284,7 +306,7 @@ jobs:
       - name: Smoke test app launch
         shell: bash
         run: |
-          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
           RUSTDESK_EXECUTABLE="$(
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
               "$RUSTDESK_APP_PATH/Contents/Info.plist"
@@ -311,24 +333,25 @@ jobs:
       - name: Create and verify unsigned DMG
         shell: bash
         run: |
-          RUSTDESK_DMG="rustdesk-${VERSION}-aarch64-unsigned.dmg"
+          RUSTDESK_DMG="ongrow-support-desk-${VERSION}-macos-arm64-adhoc.dmg"
           rm -f "$RUSTDESK_DMG"
           create-dmg \
-            --icon "RustDesk.app" 200 190 \
-            --hide-extension "RustDesk.app" \
+            --volname "OnGROW Support Desk" \
+            --icon "OnGROW Support Desk.app" 200 190 \
+            --hide-extension "OnGROW Support Desk.app" \
             --window-size 800 400 \
             --app-drop-link 600 185 \
             "$RUSTDESK_DMG" \
-            ./flutter/build/macos/Build/Products/Release/RustDesk.app
+            "./flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
           hdiutil verify "$RUSTDESK_DMG"
           shasum -a 256 "$RUSTDESK_DMG" > "${RUSTDESK_DMG}.sha256"
 
-      - name: Upload unsigned macOS artifact
+      - name: Upload ad-hoc signed macOS artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rustdesk-1.4.9-unsigned-macos-aarch64
+          name: ongrow-support-desk-1.4.9-macos-arm64
           retention-days: 7
           if-no-files-found: error
           path: |
-            rustdesk-1.4.9-aarch64-unsigned.dmg
-            rustdesk-1.4.9-aarch64-unsigned.dmg.sha256
+            ongrow-support-desk-1.4.9-macos-arm64-adhoc.dmg
+            ongrow-support-desk-1.4.9-macos-arm64-adhoc.dmg.sha256
