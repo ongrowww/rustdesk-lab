@@ -7,8 +7,8 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
-import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:ongrow_support_ui/ongrow_support_view.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class OnGrowSupportHome extends StatefulWidget {
   const OnGrowSupportHome({super.key});
@@ -73,12 +73,9 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
     return OnGrowSupportSnapshot(
       supportId: gFFI.serverModel.serverId.text,
       ready: ready,
-      canRecordScreen:
-          !isMacOS || bind.mainIsCanScreenRecording(prompt: false),
-      isProcessTrusted:
-          !isMacOS || bind.mainIsProcessTrusted(prompt: false),
-      canMonitorInput:
-          !isMacOS || bind.mainIsCanInputMonitoring(prompt: false),
+      canRecordScreen: !isMacOS || bind.mainIsCanScreenRecording(prompt: false),
+      isProcessTrusted: !isMacOS || bind.mainIsProcessTrusted(prompt: false),
+      canMonitorInput: !isMacOS || bind.mainIsCanInputMonitoring(prompt: false),
       canRecordAudio: !isMacOS || canRecordAudio,
       version: _snapshot.version,
     );
@@ -129,18 +126,58 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
     await Future<void>.delayed(const Duration(milliseconds: 500));
   }
 
+  Future<void> _openNetworkSettings() async {
+    if (!isMacOS) {
+      return;
+    }
+    final opened = await launchUrl(
+      Uri.parse(
+        'x-apple.systempreferences:com.apple.Network-Settings.extension',
+      ),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened) {
+      showToast('Netzwerkeinstellungen konnten nicht geöffnet werden');
+    }
+  }
+
+  Future<void> _openSupportEmail() async {
+    final id = trimID(_snapshot.supportId);
+    if (id.isEmpty) {
+      return;
+    }
+    final version = _snapshot.version.isEmpty ? '' : ' ${_snapshot.version}';
+    final email = Uri(
+      scheme: 'mailto',
+      path: 'support@ongrow.de',
+      queryParameters: {
+        'subject': 'Supportanfrage · OnGROW Support Desk · $id',
+        'body': 'Hallo OnGROW Kundensupport,\n\n'
+            'ich benötige Unterstützung für dieses Gerät.\n\n'
+            'Support-ID: $id\n'
+            'App: OnGROW Support Desk$version\n\n'
+            'Viele Grüße',
+      },
+    );
+    final opened = await launchUrl(email, mode: LaunchMode.externalApplication);
+    if (!opened) {
+      showToast('Es konnte keine E-Mail-App geöffnet werden');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return OnGrowSupportView(
       snapshot: _snapshot,
       actions: OnGrowSupportActions(
         copySupportId: _copySupportId,
-        requestSupport: _copySupportId,
+        requestSupport: _openSupportEmail,
         openSettings: DesktopTabPage.onAddSetting,
         requestScreenRecording: _requestScreenRecording,
         requestAccessibility: _requestAccessibility,
         requestInputMonitoring: _requestInputMonitoring,
         requestMicrophone: _requestMicrophone,
+        openNetworkSettings: _openNetworkSettings,
         refresh: _refresh,
       ),
     );

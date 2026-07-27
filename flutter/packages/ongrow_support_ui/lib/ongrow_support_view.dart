@@ -60,6 +60,7 @@ class OnGrowSupportActions {
     required this.requestAccessibility,
     required this.requestInputMonitoring,
     required this.requestMicrophone,
+    required this.openNetworkSettings,
     required this.refresh,
   });
 
@@ -70,6 +71,7 @@ class OnGrowSupportActions {
   final Future<void> Function() requestAccessibility;
   final Future<void> Function() requestInputMonitoring;
   final Future<void> Function() requestMicrophone;
+  final Future<void> Function() openNetworkSettings;
   final Future<OnGrowSupportSnapshot> Function() refresh;
 }
 
@@ -155,6 +157,17 @@ class _SupportColumn extends StatelessWidget {
 
   final OnGrowSupportSnapshot snapshot;
   final OnGrowSupportActions actions;
+
+  Future<void> _showSupportRequest(BuildContext context) {
+    return showDialog<void>(
+      context: context,
+      barrierColor: const Color(0x940E0919),
+      builder: (_) => OnGrowSupportRequestDialog(
+        snapshot: snapshot,
+        actions: actions,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -271,7 +284,8 @@ class _SupportColumn extends StatelessWidget {
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: id.isEmpty ? null : actions.requestSupport,
+                  onPressed:
+                      id.isEmpty ? null : () => _showSupportRequest(context),
                   style: ElevatedButton.styleFrom(
                     elevation: 0,
                     backgroundColor: ongrowViolet,
@@ -330,9 +344,7 @@ class _ReadyPill extends StatelessWidget {
             width: 7,
             height: 7,
             decoration: BoxDecoration(
-              color: ready
-                  ? const Color(0xFF9FCB31)
-                  : const Color(0xFFE05B68),
+              color: ready ? const Color(0xFF9FCB31) : const Color(0xFFE05B68),
               shape: BoxShape.circle,
             ),
           ),
@@ -426,8 +438,7 @@ class _PermissionsColumn extends StatelessWidget {
                 title: 'Bildschirmaufnahme',
                 detail: 'Ermöglicht die Bildschirmansicht',
                 granted: snapshot.canRecordScreen,
-                onPressed:
-                    snapshot.canRecordScreen ? null : () => openHelp(0),
+                onPressed: snapshot.canRecordScreen ? null : () => openHelp(0),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -440,13 +451,23 @@ class _PermissionsColumn extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
+                icon: Icons.router_outlined,
+                iconColor: const Color(0xFF6541C7),
+                title: 'Netzwerkzugriff',
+                detail: 'Erlaubt eingehende Supportverbindungen',
+                granted: false,
+                statusLabel: 'Prüfen →',
+                onPressed: () => openHelp(2),
+              ),
+              const SizedBox(height: 10),
+              _PermissionOverviewRow(
                 icon: Icons.mic_none_rounded,
                 iconColor: const Color(0xFF81798A),
                 title: 'Mikrofon',
                 detail: 'Nur für Sprachübertragung erforderlich',
                 granted: snapshot.canRecordAudio,
                 optional: true,
-                onPressed: () => openHelp(2),
+                onPressed: () => openHelp(3),
               ),
             ],
           ),
@@ -464,6 +485,7 @@ class _PermissionOverviewRow extends StatelessWidget {
     required this.detail,
     required this.granted,
     this.optional = false,
+    this.statusLabel,
     this.onPressed,
   });
 
@@ -473,6 +495,7 @@ class _PermissionOverviewRow extends StatelessWidget {
   final String detail;
   final bool granted;
   final bool optional;
+  final String? statusLabel;
   final VoidCallback? onPressed;
 
   @override
@@ -520,14 +543,14 @@ class _PermissionOverviewRow extends StatelessWidget {
             )
           else if (optional)
             _StatusPill(
-              label: 'Optional',
+              label: statusLabel ?? 'Optional',
               background: const Color(0xFFEDEBF0),
               foreground: const Color(0xFF5C5463),
               onPressed: onPressed,
             )
           else
             _StatusPill(
-              label: 'Öffnen →',
+              label: statusLabel ?? 'Öffnen →',
               background: const Color(0xFFEDE6FB),
               foreground: ongrowViolet,
               onPressed: onPressed,
@@ -629,6 +652,305 @@ class _Footer extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class OnGrowSupportRequestDialog extends StatefulWidget {
+  const OnGrowSupportRequestDialog({
+    super.key,
+    required this.snapshot,
+    required this.actions,
+  });
+
+  final OnGrowSupportSnapshot snapshot;
+  final OnGrowSupportActions actions;
+
+  @override
+  State<OnGrowSupportRequestDialog> createState() =>
+      _OnGrowSupportRequestDialogState();
+}
+
+class _OnGrowSupportRequestDialogState
+    extends State<OnGrowSupportRequestDialog> {
+  bool _openingEmail = false;
+
+  Future<void> _openEmail() async {
+    if (_openingEmail) {
+      return;
+    }
+    setState(() => _openingEmail = true);
+    try {
+      await widget.actions.requestSupport();
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _openingEmail = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final version = widget.snapshot.version;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(24),
+      child: Container(
+        width: 620,
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 22),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x3D140A26),
+              blurRadius: 42,
+              offset: Offset(0, 18),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Support anfordern',
+                        style: TextStyle(
+                          color: ongrowInk,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      SizedBox(height: 7),
+                      Text(
+                        'Wähle deinen Supportkontakt. Wir bereiten '
+                        'anschließend eine E-Mail mit deiner Support-ID vor.',
+                        style: TextStyle(
+                          color: Color(0xFF61596B),
+                          fontSize: 12,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 18),
+                IconButton(
+                  tooltip: 'Schließen',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFFF5F3F7),
+                    minimumSize: const Size(34, 34),
+                    maximumSize: const Size(34, 34),
+                    padding: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Supportkontakt',
+              style: TextStyle(
+                color: Color(0xFF40304A),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              height: 78,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F4FF),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: ongrowViolet, width: 1.5),
+              ),
+              child: const Row(
+                children: [
+                  _SupportAvatar(),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'OnGROW GmbH Kundensupport',
+                          style: TextStyle(
+                            color: ongrowInk,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'support@ongrow.de',
+                          style: TextStyle(
+                            color: ongrowMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.check_circle_rounded,
+                    color: ongrowViolet,
+                    size: 22,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: ongrowSurface,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.mail_outline_rounded,
+                    color: ongrowViolet,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Wird in die E-Mail übernommen',
+                          style: TextStyle(
+                            color: Color(0xFF40304A),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Support-ID ${widget.snapshot.supportId}'
+                          '${version.isEmpty ? '' : '  ·  '
+                              'OnGROW Support Desk $version'}',
+                          style: const TextStyle(
+                            color: ongrowMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Icon(
+                  Icons.lock_outline_rounded,
+                  color: ongrowMuted,
+                  size: 14,
+                ),
+                SizedBox(width: 7),
+                Expanded(
+                  child: Text(
+                    'Kein Passwort wird übermittelt. '
+                    'Du sendest die E-Mail selbst.',
+                    style: TextStyle(color: ongrowMuted, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed:
+                      _openingEmail ? null : () => Navigator.of(context).pop(),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF40304A),
+                    backgroundColor: const Color(0xFFF3F0F6),
+                    minimumSize: const Size(96, 44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                  ),
+                  child: const Text('Abbrechen'),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton.icon(
+                  onPressed: _openingEmail ? null : _openEmail,
+                  icon: _openingEmail
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.mail_outline_rounded, size: 17),
+                  label: const Text('E-Mail-App öffnen'),
+                  style: ElevatedButton.styleFrom(
+                    elevation: 0,
+                    foregroundColor: Colors.white,
+                    backgroundColor: ongrowViolet,
+                    disabledForegroundColor: Colors.white70,
+                    disabledBackgroundColor: const Color(0xFF9D76D3),
+                    minimumSize: const Size(190, 44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SupportAvatar extends StatelessWidget {
+  const _SupportAvatar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 46,
+      height: 46,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: Color(0xFFC9FF4A),
+        shape: BoxShape.circle,
+      ),
+      child: const Text(
+        'OG',
+        style: TextStyle(
+          color: ongrowInk,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -783,12 +1105,34 @@ class _OnGrowPermissionHelpDialogState
                     ),
                     const SizedBox(height: 10),
                     _HelpStep(
+                      title: 'Netzwerkzugriff',
+                      icon: Icons.router_outlined,
+                      complete: false,
+                      statusLabel: 'Bei Nachfrage',
+                      expanded: _expandedStep == 2,
+                      onToggle: () => setState(() => _expandedStep = 2),
+                      child: _StepInstructions(
+                        instructions: const [
+                          'Erlaube eingehende Netzwerkverbindungen, '
+                              'wenn macOS danach fragt.',
+                          'Prüfe bei Bedarf unter Netzwerk → Firewall → '
+                              'Optionen, dass OnGROW Support Desk '
+                              'Verbindungen annehmen darf.',
+                        ],
+                        buttonLabel: 'Netzwerkeinstellungen öffnen',
+                        busy: _busy,
+                        onPressed: () =>
+                            _run(widget.actions.openNetworkSettings),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _HelpStep(
                       title: 'Mikrofon',
                       icon: Icons.mic_none_rounded,
                       complete: _snapshot.canRecordAudio,
                       optional: true,
-                      expanded: _expandedStep == 2,
-                      onToggle: () => setState(() => _expandedStep = 2),
+                      expanded: _expandedStep == 3,
+                      onToggle: () => setState(() => _expandedStep = 3),
                       child: _StepInstructions(
                         instructions: const [
                           'Diese Freigabe ist nur für Sprachübertragung nötig.',
@@ -796,8 +1140,7 @@ class _OnGrowPermissionHelpDialogState
                         ],
                         buttonLabel: 'Mikrofonfreigabe anfragen',
                         busy: _busy,
-                        onPressed: () =>
-                            _run(widget.actions.requestMicrophone),
+                        onPressed: () => _run(widget.actions.requestMicrophone),
                       ),
                     ),
                   ],
@@ -813,9 +1156,11 @@ class _OnGrowPermissionHelpDialogState
                   color: Color(0xFF6B6470),
                 ),
                 SizedBox(width: 8),
-                Text(
-                  'Die Freigabe erfolgt immer direkt durch dich in macOS.',
-                  style: TextStyle(color: Color(0xFF6B6470), fontSize: 11),
+                Expanded(
+                  child: Text(
+                    'Die Freigabe erfolgt immer direkt durch dich in macOS.',
+                    style: TextStyle(color: Color(0xFF6B6470), fontSize: 11),
+                  ),
                 ),
               ],
             ),
@@ -885,6 +1230,7 @@ class _HelpStep extends StatelessWidget {
     required this.onToggle,
     required this.child,
     this.optional = false,
+    this.statusLabel,
   });
 
   final String title;
@@ -894,6 +1240,7 @@ class _HelpStep extends StatelessWidget {
   final VoidCallback onToggle;
   final Widget child;
   final bool optional;
+  final String? statusLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -951,9 +1298,11 @@ class _HelpStep extends StatelessWidget {
                   _StatusPill(
                     label: complete
                         ? 'Erledigt'
-                        : optional
-                            ? 'Optional'
-                            : 'Jetzt einrichten',
+                        : statusLabel != null
+                            ? statusLabel!
+                            : optional
+                                ? 'Optional'
+                                : 'Jetzt einrichten',
                     background: complete
                         ? const Color(0xFFE8F9BE)
                         : const Color(0xFFF0ECF8),

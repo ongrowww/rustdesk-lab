@@ -39,7 +39,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     isProcessTrusted: false,
     canMonitorInput: false,
     canRecordAudio: false,
-    version: 'Preview',
+    version: 'Preview · Mail & Netzwerk',
   );
 
   Future<OnGrowSupportSnapshot> _refresh() async => _snapshot;
@@ -98,14 +98,16 @@ class _PreviewScreenState extends State<_PreviewScreen> {
             actions: OnGrowSupportActions(
               copySupportId: _copyId,
               requestSupport: () async {
-                await _copyId();
-                _message('Preview: Supportanfrage simuliert');
+                _message('Preview: E-Mail-App würde geöffnet');
               },
               openSettings: () => _message('Preview: Einstellungen geöffnet'),
               requestScreenRecording: () => _grant(screen: true),
               requestAccessibility: () => _grant(accessibility: true),
               requestInputMonitoring: () => _grant(inputMonitoring: true),
               requestMicrophone: () => _grant(microphone: true),
+              openNetworkSettings: () async {
+                _message('Preview: Netzwerkeinstellungen würden geöffnet');
+              },
               refresh: _refresh,
             ),
           ),

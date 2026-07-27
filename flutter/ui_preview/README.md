@@ -22,7 +22,8 @@ Während der Prozess läuft:
 - `q`: Preview beenden
 
 Alternativ kann bei bereits installiertem Flutter direkt `./run.sh` ausgeführt
-werden.
+werden. Das Skript startet einen lokalen Web-Server auf
+`http://127.0.0.1:7357` und öffnet die Preview automatisch in Microsoft Edge.
 
 Die Berechtigungsbuttons simulieren erfolgreiche Freigaben. Änderungen an
 `../packages/ongrow_support_ui/lib/ongrow_support_view.dart` erscheinen per Hot
