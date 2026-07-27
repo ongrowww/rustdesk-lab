@@ -277,10 +277,36 @@ jobs:
             --force \
             --sign - \
             --timestamp=none \
-            --options runtime \
             --entitlements flutter/macos/Runner/Release.entitlements \
             "$RUSTDESK_APP_PATH"
           codesign --verify --deep --strict --verbose=4 "$RUSTDESK_APP_PATH"
+
+      - name: Smoke test app launch
+        shell: bash
+        run: |
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          RUSTDESK_EXECUTABLE="$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+              "$RUSTDESK_APP_PATH/Contents/Info.plist"
+          )"
+          "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
+            >/dev/null 2>&1 &
+          RUSTDESK_PID=$!
+          cleanup() {
+            kill "$RUSTDESK_PID" 2>/dev/null || true
+            wait "$RUSTDESK_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          sleep 5
+          if ! kill -0 "$RUSTDESK_PID" 2>/dev/null; then
+            if wait "$RUSTDESK_PID"; then
+              RUSTDESK_EXIT=0
+            else
+              RUSTDESK_EXIT=$?
+            fi
+            echo "RustDesk exited during launch smoke test: $RUSTDESK_EXIT"
+            exit 1
+          fi
 
       - name: Create and verify unsigned DMG
         shell: bash
