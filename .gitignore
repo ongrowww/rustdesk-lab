@@ -16,6 +16,7 @@ cert.pfx
 *.bak
 *png
 *svg
+!flutter/packages/ongrow_support_ui/assets/ongrow-logo.svg
 *jpg
 sciter.dll
 **pdb
@@ -32,6 +33,7 @@ appimage/*.xz
 # flutter
 flutter/linux/build/**
 flutter/linux/cmake-build-debug/**
+flutter/ui_preview/build/**
 # flatpak
 flatpak/.flatpak-builder/**
 flatpak/ccache/**
