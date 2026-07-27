@@ -262,6 +262,26 @@ jobs:
           file "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
             | grep -q "arm64"
 
+      - name: Ad-hoc sign and verify app bundle
+        shell: bash
+        run: |
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/RustDesk.app"
+          RUSTDESK_SERVICE_PATH="$RUSTDESK_APP_PATH/Contents/MacOS/service"
+          test -x "$RUSTDESK_SERVICE_PATH"
+          codesign \
+            --force \
+            --sign - \
+            --timestamp=none \
+            "$RUSTDESK_SERVICE_PATH"
+          codesign \
+            --force \
+            --sign - \
+            --timestamp=none \
+            --options runtime \
+            --entitlements flutter/macos/Runner/Release.entitlements \
+            "$RUSTDESK_APP_PATH"
+          codesign --verify --deep --strict --verbose=4 "$RUSTDESK_APP_PATH"
+
       - name: Create and verify unsigned DMG
         shell: bash
         run: |
