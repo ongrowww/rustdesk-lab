@@ -208,6 +208,36 @@ class MainFlutterWindow: NSWindow {
                         result(-1)
                         break
                     }
+                case "canAcceptIncomingConnections":
+                    DispatchQueue.global(qos: .utility).async {
+                        let task = Process()
+                        let output = Pipe()
+                        task.executableURL = URL(
+                            fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw"
+                        )
+                        task.arguments = ["--getappblocked", Bundle.main.bundlePath]
+                        task.standardOutput = output
+                        task.standardError = output
+
+                        var permitted = false
+                        do {
+                            try task.run()
+                            task.waitUntilExit()
+                            let data = output.fileHandleForReading.readDataToEndOfFile()
+                            let message = String(data: data, encoding: .utf8) ?? ""
+                            permitted = task.terminationStatus == 0
+                                && message.localizedCaseInsensitiveContains("permitted")
+                        } catch {
+                            NSLog(
+                                "[RustDesk] Failed to read macOS firewall status: %@",
+                                error.localizedDescription
+                            )
+                        }
+
+                        DispatchQueue.main.async {
+                            result(permitted)
+                        }
+                    }
                 case "requestRecordAudio":
                     AVCaptureDevice.requestAccess(for: .audio, completionHandler: { granted in
                         DispatchQueue.main.async {

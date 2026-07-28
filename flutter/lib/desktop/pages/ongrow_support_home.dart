@@ -17,8 +17,10 @@ class OnGrowSupportHome extends StatefulWidget {
   State<OnGrowSupportHome> createState() => _OnGrowSupportHomeState();
 }
 
-class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
+class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
+    with WidgetsBindingObserver {
   Timer? _refreshTimer;
+  var _canAcceptIncomingConnections = !isMacOS;
   var _snapshot = const OnGrowSupportSnapshot(
     supportId: '',
     ready: false,
@@ -26,13 +28,16 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
     isProcessTrusted: false,
     canMonitorInput: false,
     canRecordAudio: false,
+    canAcceptIncomingConnections: false,
   );
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadVersion();
     _refresh();
+    _refreshNetworkPermission();
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _refresh(),
@@ -41,8 +46,29 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+      _refreshNetworkPermission();
+    }
+  }
+
+  Future<void> _refreshNetworkPermission() async {
+    try {
+      _canAcceptIncomingConnections =
+          !isMacOS || await osxCanAcceptIncomingConnections();
+    } catch (_) {
+      _canAcceptIncomingConnections = false;
+    }
+    if (mounted) {
+      await _refresh();
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -77,6 +103,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome> {
       isProcessTrusted: !isMacOS || bind.mainIsProcessTrusted(prompt: false),
       canMonitorInput: !isMacOS || bind.mainIsCanInputMonitoring(prompt: false),
       canRecordAudio: !isMacOS || canRecordAudio,
+      canAcceptIncomingConnections: _canAcceptIncomingConnections,
       version: _snapshot.version,
     );
   }

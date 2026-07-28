@@ -3099,6 +3099,13 @@ Future<bool> osxRequestAudio() async {
   return await kMacOSPermChannel.invokeMethod("requestRecordAudio");
 }
 
+Future<bool> osxCanAcceptIncomingConnections() async {
+  return await kMacOSPermChannel.invokeMethod<bool>(
+        "canAcceptIncomingConnections",
+      ) ??
+      false;
+}
+
 Widget futureBuilder(
     {required Future? future, required Widget Function(dynamic data) hasData}) {
   return FutureBuilder(

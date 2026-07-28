@@ -9,10 +9,14 @@ const _snapshot = OnGrowSupportSnapshot(
   isProcessTrusted: false,
   canMonitorInput: false,
   canRecordAudio: false,
+  canAcceptIncomingConnections: false,
   version: '1.4.9',
 );
 
-Widget _app(OnGrowSupportActions actions) {
+Widget _app(
+  OnGrowSupportActions actions, {
+  OnGrowSupportSnapshot snapshot = _snapshot,
+}) {
   return MaterialApp(
     theme: ThemeData(
       colorScheme: ColorScheme.fromSeed(seedColor: ongrowViolet),
@@ -23,7 +27,7 @@ Widget _app(OnGrowSupportActions actions) {
         width: 1120,
         height: 620,
         child: OnGrowSupportView(
-          snapshot: _snapshot,
+          snapshot: snapshot,
           actions: actions,
         ),
       ),
@@ -34,6 +38,7 @@ Widget _app(OnGrowSupportActions actions) {
 OnGrowSupportActions _actions({
   Future<void> Function()? requestSupport,
   Future<void> Function()? openNetworkSettings,
+  Future<OnGrowSupportSnapshot> Function()? refresh,
 }) {
   return OnGrowSupportActions(
     copySupportId: () async {},
@@ -44,7 +49,7 @@ OnGrowSupportActions _actions({
     requestInputMonitoring: () async {},
     requestMicrophone: () async {},
     openNetworkSettings: openNetworkSettings ?? () async {},
-    refresh: () async => _snapshot,
+    refresh: refresh ?? () async => _snapshot,
   );
 }
 
@@ -109,5 +114,57 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(networkRequests, 1);
+  });
+
+  testWidgets('shows permitted incoming connections as granted',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      _app(
+        _actions(),
+        snapshot: _snapshot.copyWith(canAcceptIncomingConnections: true),
+      ),
+    );
+
+    expect(find.text('Prüfen →'), findsNothing);
+    expect(find.text('✓ Erlaubt'), findsNWidgets(2));
+  });
+
+  testWidgets('refreshes granted permissions while the help dialog is open',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final granted = _snapshot.copyWith(
+      canRecordScreen: true,
+      isProcessTrusted: true,
+      canMonitorInput: true,
+      canRecordAudio: true,
+      canAcceptIncomingConnections: true,
+    );
+    var refreshed = false;
+    await tester.pumpWidget(
+      _app(
+        _actions(
+          refresh: () async => refreshed ? granted : _snapshot,
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Einrichtungshilfe'));
+    await tester.pumpAndSettle();
+    expect(find.text('Jetzt einrichten'), findsWidgets);
+
+    refreshed = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+
+    expect(find.text('Erledigt'), findsNWidgets(4));
   });
 }
