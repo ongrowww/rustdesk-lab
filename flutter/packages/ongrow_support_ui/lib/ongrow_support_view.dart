@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -17,6 +19,7 @@ class OnGrowSupportSnapshot {
     required this.isProcessTrusted,
     required this.canMonitorInput,
     required this.canRecordAudio,
+    required this.canAcceptIncomingConnections,
     this.version = '',
   });
 
@@ -26,6 +29,7 @@ class OnGrowSupportSnapshot {
   final bool isProcessTrusted;
   final bool canMonitorInput;
   final bool canRecordAudio;
+  final bool canAcceptIncomingConnections;
   final String version;
 
   bool get canControl => isProcessTrusted && canMonitorInput;
@@ -37,6 +41,7 @@ class OnGrowSupportSnapshot {
     bool? isProcessTrusted,
     bool? canMonitorInput,
     bool? canRecordAudio,
+    bool? canAcceptIncomingConnections,
     String? version,
   }) {
     return OnGrowSupportSnapshot(
@@ -46,6 +51,8 @@ class OnGrowSupportSnapshot {
       isProcessTrusted: isProcessTrusted ?? this.isProcessTrusted,
       canMonitorInput: canMonitorInput ?? this.canMonitorInput,
       canRecordAudio: canRecordAudio ?? this.canRecordAudio,
+      canAcceptIncomingConnections:
+          canAcceptIncomingConnections ?? this.canAcceptIncomingConnections,
       version: version ?? this.version,
     );
   }
@@ -455,9 +462,12 @@ class _PermissionsColumn extends StatelessWidget {
                 iconColor: const Color(0xFF6541C7),
                 title: 'Netzwerkzugriff',
                 detail: 'Erlaubt eingehende Supportverbindungen',
-                granted: false,
-                statusLabel: 'Prüfen →',
-                onPressed: () => openHelp(2),
+                granted: snapshot.canAcceptIncomingConnections,
+                statusLabel:
+                    snapshot.canAcceptIncomingConnections ? null : 'Prüfen →',
+                onPressed: snapshot.canAcceptIncomingConnections
+                    ? null
+                    : () => openHelp(2),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -977,13 +987,40 @@ class _OnGrowPermissionHelpDialogState
     extends State<OnGrowPermissionHelpDialog> {
   late OnGrowSupportSnapshot _snapshot;
   late int _expandedStep;
+  Timer? _refreshTimer;
   bool _busy = false;
+  bool _refreshing = false;
 
   @override
   void initState() {
     super.initState();
     _snapshot = widget.initialSnapshot;
     _expandedStep = widget.initialStep;
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _refreshSnapshot(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshSnapshot() async {
+    if (_busy || _refreshing) {
+      return;
+    }
+    _refreshing = true;
+    try {
+      final refreshed = await widget.actions.refresh();
+      if (mounted) {
+        setState(() => _snapshot = refreshed);
+      }
+    } finally {
+      _refreshing = false;
+    }
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -1107,8 +1144,10 @@ class _OnGrowPermissionHelpDialogState
                     _HelpStep(
                       title: 'Netzwerkzugriff',
                       icon: Icons.router_outlined,
-                      complete: false,
-                      statusLabel: 'Bei Nachfrage',
+                      complete: _snapshot.canAcceptIncomingConnections,
+                      statusLabel: _snapshot.canAcceptIncomingConnections
+                          ? null
+                          : 'Bei Nachfrage',
                       expanded: _expandedStep == 2,
                       onToggle: () => setState(() => _expandedStep = 2),
                       child: _StepInstructions(

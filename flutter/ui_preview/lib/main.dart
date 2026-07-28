@@ -39,6 +39,7 @@ class _PreviewScreenState extends State<_PreviewScreen> {
     isProcessTrusted: false,
     canMonitorInput: false,
     canRecordAudio: false,
+    canAcceptIncomingConnections: true,
     version: 'Preview · Mail & Netzwerk',
   );
 
