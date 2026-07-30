@@ -945,6 +945,10 @@ pub fn main_change_id(new_id: String) {
     change_id(new_id)
 }
 
+pub fn main_request_ongrow_device_attestation() -> String {
+    request_ongrow_device_attestation()
+}
+
 pub fn main_get_async_status() -> String {
     get_async_job_status()
 }

@@ -87,6 +87,10 @@ jobs:
             flutter/pubspec.yaml
           pushd flutter
           flutter pub get
+          flutter test --no-pub test/ongrow_device_attestation_test.dart
+          flutter analyze --no-pub \
+            lib/common/ongrow_device_attestation.dart \
+            test/ongrow_device_attestation_test.dart
           popd
 
       - name: Generate Flutter Rust Bridge files
@@ -209,6 +213,9 @@ jobs:
         with:
           prefix-key: macos-14
 
+      - name: Check Rust formatting
+        run: cargo fmt -- --check
+
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -238,6 +245,11 @@ jobs:
           fi
           head -n 100 \
             "${VCPKG_ROOT}/buildtrees/ffmpeg/build-arm64-osx-rel-out.log" || true
+
+      - name: Run OnGROW device attestation tests
+        run: |
+          cargo test --locked --lib --features flutter \
+            ui_interface::tests
 
       - name: Build RustDesk
         shell: bash

@@ -746,6 +746,10 @@ class RustdeskImpl {
     throw UnimplementedError("mainChangeId");
   }
 
+  Future<String> mainRequestOngrowDeviceAttestation({dynamic hint}) {
+    throw UnimplementedError("mainRequestOngrowDeviceAttestation");
+  }
+
   Future<String> mainGetAsyncStatus({dynamic hint}) {
     throw UnimplementedError("mainGetAsyncStatus");
   }

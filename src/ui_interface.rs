@@ -7,7 +7,9 @@ use hbb_common::{
     directories_next,
     futures::future::join_all,
     log,
+    protobuf::Message as _,
     rendezvous_proto::*,
+    sha2::{Digest, Sha256},
     tokio,
 };
 use hbb_common::sodiumoxide::crypto::sign;
@@ -1489,18 +1491,52 @@ pub(crate) async fn send_to_cm(data: &ipc::Data) {
 
 const INVALID_FORMAT: &'static str = "Invalid format";
 const UNKNOWN_ERROR: &'static str = "Unknown error";
-const ONGROW_CUSTOM_ID_PROOF_CONTEXT: &[u8] = b"ongrow-rustdesk-custom-id-v1";
+const ONGROW_CUSTOM_ID_PROOF_CONTEXT_V1: &[u8] = b"ongrow-rustdesk-custom-id-v1";
+const ONGROW_CUSTOM_ID_PROOF_CONTEXT_V2: &[u8] = b"ongrow-rustdesk-custom-id-v2";
+const ONGROW_DEVICE_ATTESTATION_CONTEXT: &[u8] =
+    b"ongrow-rustdesk-device-attestation-v1";
+const ONGROW_ATTESTATION_NONCE_BYTES: usize = 32;
+const ONGROW_ATTESTATION_VALIDITY_SECONDS: i64 = 300;
+const ONGROW_ATTESTATION_CLOCK_SKEW_SECONDS: i64 = 60;
 
 fn ongrow_custom_id_proof_payload(old_id: &str, new_id: &str, uuid: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(
-        ONGROW_CUSTOM_ID_PROOF_CONTEXT.len() + old_id.len() + new_id.len() + uuid.len() + 12,
+        ONGROW_CUSTOM_ID_PROOF_CONTEXT_V1.len() + old_id.len() + new_id.len() + uuid.len() + 12,
     );
-    payload.extend_from_slice(ONGROW_CUSTOM_ID_PROOF_CONTEXT);
+    payload.extend_from_slice(ONGROW_CUSTOM_ID_PROOF_CONTEXT_V1);
     for field in [old_id.as_bytes(), new_id.as_bytes(), uuid] {
-        payload.extend_from_slice(&(field.len() as u32).to_be_bytes());
-        payload.extend_from_slice(field);
+        append_ongrow_field(&mut payload, field);
     }
     payload
+}
+
+fn ongrow_custom_id_proof_payload_v2(
+    old_id: &str,
+    new_id: &str,
+    uuid: &[u8],
+    nonce: &[u8],
+) -> Option<Vec<u8>> {
+    if nonce.len() != ONGROW_ATTESTATION_NONCE_BYTES {
+        return None;
+    }
+    let mut payload = Vec::with_capacity(
+        ONGROW_CUSTOM_ID_PROOF_CONTEXT_V2.len()
+            + old_id.len()
+            + new_id.len()
+            + uuid.len()
+            + nonce.len()
+            + 16,
+    );
+    payload.extend_from_slice(ONGROW_CUSTOM_ID_PROOF_CONTEXT_V2);
+    for field in [old_id.as_bytes(), new_id.as_bytes(), uuid, nonce] {
+        append_ongrow_field(&mut payload, field);
+    }
+    Some(payload)
+}
+
+fn append_ongrow_field(payload: &mut Vec<u8>, field: &[u8]) {
+    payload.extend_from_slice(&(field.len() as u32).to_be_bytes());
+    payload.extend_from_slice(field);
 }
 
 fn sign_ongrow_custom_id_change(
@@ -1518,6 +1554,232 @@ fn sign_ongrow_custom_id_change(
         &ongrow_custom_id_proof_payload(old_id, new_id, uuid),
         &sign::SecretKey(secret_key_bytes),
     ))
+}
+
+fn sign_ongrow_custom_id_attestation_request(
+    id: &str,
+    uuid: &[u8],
+    nonce: &[u8],
+    secret_key: &[u8],
+) -> Option<Vec<u8>> {
+    if secret_key.len() != sign::SECRETKEYBYTES {
+        return None;
+    }
+    let payload = ongrow_custom_id_proof_payload_v2(id, id, uuid, nonce)?;
+    let mut secret_key_bytes = [0; sign::SECRETKEYBYTES];
+    secret_key_bytes.copy_from_slice(secret_key);
+    Some(sign::sign(&payload, &sign::SecretKey(secret_key_bytes)))
+}
+
+fn ongrow_device_attestation_payload(
+    attestation: &OnGrowDeviceAttestation,
+) -> Option<Vec<u8>> {
+    if !hbb_common::is_valid_custom_id(&attestation.id)
+        || attestation.device_pk.len() != sign::PUBLICKEYBYTES
+        || attestation.uuid_sha256.len() != 32
+        || attestation.nonce.len() != ONGROW_ATTESTATION_NONCE_BYTES
+    {
+        return None;
+    }
+    let issued_at_bytes = attestation.issued_at.to_be_bytes();
+    let expires_at_bytes = attestation.expires_at.to_be_bytes();
+    let mut payload = Vec::with_capacity(
+        ONGROW_DEVICE_ATTESTATION_CONTEXT.len()
+            + attestation.id.len()
+            + attestation.device_pk.len()
+            + attestation.uuid_sha256.len()
+            + attestation.nonce.len()
+            + 6 * 4
+            + 16,
+    );
+    payload.extend_from_slice(ONGROW_DEVICE_ATTESTATION_CONTEXT);
+    for field in [
+        attestation.id.as_bytes(),
+        attestation.device_pk.as_ref(),
+        attestation.uuid_sha256.as_ref(),
+        issued_at_bytes.as_slice(),
+        expires_at_bytes.as_slice(),
+        attestation.nonce.as_ref(),
+    ] {
+        append_ongrow_field(&mut payload, field);
+    }
+    Some(payload)
+}
+
+fn validate_ongrow_device_attestation(
+    attestation: &OnGrowDeviceAttestation,
+    expected_id: &str,
+    expected_device_pk: &[u8],
+    uuid: &[u8],
+    expected_nonce: &[u8],
+    server_public_key: &[u8],
+    now: i64,
+) -> bool {
+    if server_public_key.len() != sign::PUBLICKEYBYTES
+        || attestation.id != expected_id
+        || attestation.device_pk.as_ref() != expected_device_pk
+        || attestation.uuid_sha256.as_ref() != Sha256::digest(uuid).as_slice()
+        || attestation.nonce.as_ref() != expected_nonce
+        || attestation.expires_at.checked_sub(attestation.issued_at)
+            != Some(ONGROW_ATTESTATION_VALIDITY_SECONDS)
+        || attestation.expires_at < now
+        || attestation.issued_at > now.saturating_add(ONGROW_ATTESTATION_CLOCK_SKEW_SECONDS)
+    {
+        return false;
+    }
+    let Some(expected_payload) = ongrow_device_attestation_payload(attestation) else {
+        return false;
+    };
+    let mut server_public_key_bytes = [0; sign::PUBLICKEYBYTES];
+    server_public_key_bytes.copy_from_slice(server_public_key);
+    sign::verify(
+        &attestation.signed_payload,
+        &sign::PublicKey(server_public_key_bytes),
+    )
+    .map(|payload| payload == expected_payload)
+    .unwrap_or(false)
+}
+
+fn validate_ongrow_device_attestation_response(
+    response: RegisterPkResponse,
+    expected_id: &str,
+    expected_device_pk: &[u8],
+    uuid: &[u8],
+    expected_nonce: &[u8],
+    server_public_key: &[u8],
+    now: i64,
+) -> Result<OnGrowDeviceAttestation, &'static str> {
+    match response.result.enum_value() {
+        Ok(register_pk_response::Result::OK) => {}
+        Ok(register_pk_response::Result::NOT_SUPPORT) => {
+            return Err("server_not_support");
+        }
+        Ok(register_pk_response::Result::SERVER_ERROR) => {
+            return Err("server_error");
+        }
+        _ => return Err("attestation_rejected"),
+    }
+    let Some(attestation) = response.ongrow_device_attestation.into_option() else {
+        return Err("attestation_missing");
+    };
+    if !validate_ongrow_device_attestation(
+        &attestation,
+        expected_id,
+        expected_device_pk,
+        uuid,
+        expected_nonce,
+        server_public_key,
+        now,
+    ) {
+        return Err("attestation_invalid");
+    }
+    Ok(attestation)
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[derive(Serialize)]
+struct OnGrowDeviceAttestationRequestResult {
+    attestation: String,
+    error: String,
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[tokio::main(flavor = "current_thread")]
+pub async fn request_ongrow_device_attestation() -> String {
+    let result = match request_ongrow_device_attestation_().await {
+        Ok(attestation) => OnGrowDeviceAttestationRequestResult {
+            attestation,
+            error: String::new(),
+        },
+        Err(error) => OnGrowDeviceAttestationRequestResult {
+            attestation: String::new(),
+            error: error.to_owned(),
+        },
+    };
+    serde_json::to_string(&result).unwrap_or_else(|_| {
+        r#"{"attestation":"","error":"serialization_failed"}"#.to_owned()
+    })
+}
+
+#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+async fn request_ongrow_device_attestation_() -> Result<String, &'static str> {
+    let id = get_id();
+    if !hbb_common::is_valid_custom_id(&id) {
+        return Err("invalid_device_id");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let uuid = Bytes::from(
+        hbb_common::machine_uid::get()
+            .unwrap_or_default()
+            .into_bytes(),
+    );
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let uuid = Bytes::from(hbb_common::get_uuid());
+    if uuid.is_empty() {
+        return Err("device_identity_unavailable");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let rendezvous_servers = crate::ipc::get_rendezvous_servers(1_000).await;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let rendezvous_servers = Config::get_rendezvous_servers();
+    let Some(rendezvous_server) = rendezvous_servers.into_iter().next() else {
+        return Err("rendezvous_server_unavailable");
+    };
+
+    let (secret_key, device_public_key) = Config::get_key_pair();
+    hbb_common::sodiumoxide::init().map_err(|_| "crypto_unavailable")?;
+    let nonce = hbb_common::sodiumoxide::randombytes::randombytes(
+        ONGROW_ATTESTATION_NONCE_BYTES,
+    );
+    let Some(proof) =
+        sign_ongrow_custom_id_attestation_request(&id, &uuid, &nonce, &secret_key)
+    else {
+        return Err("device_signing_failed");
+    };
+
+    let mut socket = hbb_common::socket_client::connect_tcp(
+        crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
+        CONNECT_TIMEOUT,
+    )
+    .await
+    .map_err(|_| "rendezvous_connection_failed")?;
+    let mut msg_out = Message::new();
+    msg_out.set_register_pk(RegisterPk {
+        old_id: id.clone(),
+        id: id.clone(),
+        uuid: uuid.clone(),
+        pk: proof.into(),
+        ongrow_attestation_nonce: nonce.clone().into(),
+        ..Default::default()
+    });
+    socket
+        .send(&msg_out)
+        .await
+        .map_err(|_| "attestation_request_failed")?;
+    let msg_in = crate::common::get_next_nonkeyexchange_msg(&mut socket, None)
+        .await
+        .ok_or("attestation_response_missing")?;
+    let Some(rendezvous_message::Union::RegisterPkResponse(rpr)) = msg_in.union else {
+        return Err("attestation_response_invalid");
+    };
+    let server_public_key = crate::decode64(crate::get_key(true).await)
+        .map_err(|_| "server_key_invalid")?;
+    let now = hbb_common::get_time() / 1_000;
+    let attestation = validate_ongrow_device_attestation_response(
+        rpr,
+        &id,
+        &device_public_key,
+        &uuid,
+        &nonce,
+        &server_public_key,
+        now,
+    )?;
+    let serialized = attestation
+        .write_to_bytes()
+        .map_err(|_| "attestation_serialization_failed")?;
+    Ok(crate::encode64(serialized))
 }
 
 #[inline]
@@ -1780,10 +2042,20 @@ pub fn is_remote_modify_enabled_by_control_permissions() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ongrow_custom_id_proof_payload, sign_ongrow_custom_id_change,
-        trim_video_save_directory, validate_windows_service_video_save_directory,
+        ongrow_custom_id_proof_payload, ongrow_custom_id_proof_payload_v2,
+        ongrow_device_attestation_payload, sign_ongrow_custom_id_attestation_request,
+        sign_ongrow_custom_id_change, trim_video_save_directory,
+        validate_ongrow_device_attestation, validate_ongrow_device_attestation_response,
+        validate_windows_service_video_save_directory, ONGROW_ATTESTATION_NONCE_BYTES,
     };
-    use hbb_common::sodiumoxide::crypto::sign;
+    use hbb_common::{
+        protobuf::MessageField,
+        rendezvous_proto::{
+            register_pk_response, OnGrowDeviceAttestation, RegisterPkResponse,
+        },
+        sha2::{Digest, Sha256},
+        sodiumoxide::crypto::sign,
+    };
 
     #[test]
     fn custom_id_proof_is_bound_to_exact_change() {
@@ -1813,6 +2085,192 @@ mod tests {
                 b"test-machine-uuid",
             ),
         );
+    }
+
+    #[test]
+    fn attestation_request_proof_is_bound_to_nonce() {
+        hbb_common::sodiumoxide::init().unwrap();
+        let (public_key, secret_key) = sign::keypair_from_seed(&sign::Seed([7; 32]));
+        let nonce = [9; ONGROW_ATTESTATION_NONCE_BYTES];
+        let proof = sign_ongrow_custom_id_attestation_request(
+            "OG-0001",
+            b"test-machine-uuid",
+            &nonce,
+            &secret_key.0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sign::verify(&proof, &public_key).unwrap(),
+            ongrow_custom_id_proof_payload_v2(
+                "OG-0001",
+                "OG-0001",
+                b"test-machine-uuid",
+                &nonce,
+            )
+            .unwrap(),
+        );
+        assert!(sign_ongrow_custom_id_attestation_request(
+            "OG-0001",
+            b"test-machine-uuid",
+            &nonce[..31],
+            &secret_key.0,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn validates_exact_server_attestation_and_rejects_tampering() {
+        hbb_common::sodiumoxide::init().unwrap();
+        let (server_public_key, server_secret_key) =
+            sign::keypair_from_seed(&sign::Seed([11; 32]));
+        let (device_public_key, _) = sign::keypair_from_seed(&sign::Seed([7; 32]));
+        let uuid = b"raw-test-machine-uuid";
+        let nonce = [9; ONGROW_ATTESTATION_NONCE_BYTES];
+        let issued_at = 1_722_345_600;
+        let mut attestation = OnGrowDeviceAttestation {
+            id: "OG-0001".to_owned(),
+            device_pk: device_public_key.0.to_vec().into(),
+            uuid_sha256: Sha256::digest(uuid).to_vec().into(),
+            issued_at,
+            expires_at: issued_at + 300,
+            nonce: nonce.to_vec().into(),
+            ..Default::default()
+        };
+        attestation.signed_payload =
+            sign::sign(&ongrow_device_attestation_payload(&attestation).unwrap(), &server_secret_key)
+                .into();
+
+        assert!(validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &server_public_key.0,
+            issued_at,
+        ));
+
+        let mut wrong_nonce = nonce;
+        wrong_nonce[0] ^= 1;
+        assert!(!validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &wrong_nonce,
+            &server_public_key.0,
+            issued_at,
+        ));
+        assert!(!validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &server_public_key.0,
+            attestation.expires_at + 1,
+        ));
+        assert!(!validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &server_public_key.0,
+            attestation.issued_at - 61,
+        ));
+
+        let response = RegisterPkResponse {
+            result: register_pk_response::Result::OK.into(),
+            ongrow_device_attestation: MessageField::from_option(Some(attestation.clone())),
+            ..Default::default()
+        };
+        assert!(validate_ongrow_device_attestation_response(
+            response,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &server_public_key.0,
+            issued_at,
+        )
+        .is_ok());
+        assert_eq!(
+            validate_ongrow_device_attestation_response(
+                RegisterPkResponse {
+                    result: register_pk_response::Result::OK.into(),
+                    ..Default::default()
+                },
+                "OG-0001",
+                &device_public_key.0,
+                uuid,
+                &nonce,
+                &server_public_key.0,
+                issued_at,
+            )
+            .unwrap_err(),
+            "attestation_missing"
+        );
+        assert_eq!(
+            validate_ongrow_device_attestation_response(
+                RegisterPkResponse {
+                    result: register_pk_response::Result::NOT_SUPPORT.into(),
+                    ..Default::default()
+                },
+                "OG-0001",
+                &device_public_key.0,
+                uuid,
+                &nonce,
+                &server_public_key.0,
+                issued_at,
+            )
+            .unwrap_err(),
+            "server_not_support"
+        );
+        let (wrong_server_public_key, _) =
+            sign::keypair_from_seed(&sign::Seed([12; 32]));
+        assert!(!validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &wrong_server_public_key.0,
+            issued_at,
+        ));
+
+        attestation.id = "OG-0002".to_owned();
+        assert!(!validate_ongrow_device_attestation(
+            &attestation,
+            "OG-0001",
+            &device_public_key.0,
+            uuid,
+            &nonce,
+            &server_public_key.0,
+            issued_at,
+        ));
+    }
+
+    #[test]
+    fn attestation_payload_matches_cross_fork_test_vector() {
+        let mut attestation = OnGrowDeviceAttestation {
+            id: "OG-0001".to_owned(),
+            device_pk: (0..32).collect::<Vec<u8>>().into(),
+            uuid_sha256: Sha256::digest(b"raw-test-machine-uuid").to_vec().into(),
+            issued_at: 1_722_345_600,
+            expires_at: 1_722_345_900,
+            nonce: vec![9; ONGROW_ATTESTATION_NONCE_BYTES].into(),
+            ..Default::default()
+        };
+        let payload = ongrow_device_attestation_payload(&attestation).unwrap();
+
+        assert_eq!(
+            hex::encode(payload),
+            "6f6e67726f772d727573746465736b2d6465766963652d6174746573746174696f6e2d7631000000074f472d3030303100000020000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000020c0d751187c93edea0572d744031fe1cf82b9a18fd8c9bd414bcdd0c1ea266116000000080000000066a8e880000000080000000066a8e9ac000000200909090909090909090909090909090909090909090909090909090909090909"
+        );
+        attestation.nonce.truncate(31);
+        assert!(ongrow_device_attestation_payload(&attestation).is_none());
     }
 
     #[test]
