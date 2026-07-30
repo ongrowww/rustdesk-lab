@@ -10,6 +10,7 @@ use hbb_common::{
     rendezvous_proto::*,
     tokio,
 };
+use hbb_common::sodiumoxide::crypto::sign;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::{
     sleep,
@@ -1488,6 +1489,36 @@ pub(crate) async fn send_to_cm(data: &ipc::Data) {
 
 const INVALID_FORMAT: &'static str = "Invalid format";
 const UNKNOWN_ERROR: &'static str = "Unknown error";
+const ONGROW_CUSTOM_ID_PROOF_CONTEXT: &[u8] = b"ongrow-rustdesk-custom-id-v1";
+
+fn ongrow_custom_id_proof_payload(old_id: &str, new_id: &str, uuid: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(
+        ONGROW_CUSTOM_ID_PROOF_CONTEXT.len() + old_id.len() + new_id.len() + uuid.len() + 12,
+    );
+    payload.extend_from_slice(ONGROW_CUSTOM_ID_PROOF_CONTEXT);
+    for field in [old_id.as_bytes(), new_id.as_bytes(), uuid] {
+        payload.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        payload.extend_from_slice(field);
+    }
+    payload
+}
+
+fn sign_ongrow_custom_id_change(
+    old_id: &str,
+    new_id: &str,
+    uuid: &[u8],
+    secret_key: &[u8],
+) -> Option<Vec<u8>> {
+    if secret_key.len() != sign::SECRETKEYBYTES {
+        return None;
+    }
+    let mut secret_key_bytes = [0; sign::SECRETKEYBYTES];
+    secret_key_bytes.copy_from_slice(secret_key);
+    Some(sign::sign(
+        &ongrow_custom_id_proof_payload(old_id, new_id, uuid),
+        &sign::SecretKey(secret_key_bytes),
+    ))
+}
 
 #[inline]
 #[tokio::main(flavor = "current_thread")]
@@ -1569,11 +1600,19 @@ async fn check_id(
     )
     .await
     {
+        let (secret_key, _) = Config::get_key_pair();
+        let Some(proof) =
+            sign_ongrow_custom_id_change(&old_id, &id, &uuid, &secret_key)
+        else {
+            log::error!("Failed to sign custom ID change request");
+            return UNKNOWN_ERROR;
+        };
         let mut msg_out = Message::new();
         msg_out.set_register_pk(RegisterPk {
             old_id,
             id,
             uuid,
+            pk: proof.into(),
             ..Default::default()
         });
         let mut ok = false;
@@ -1740,7 +1779,41 @@ pub fn is_remote_modify_enabled_by_control_permissions() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{trim_video_save_directory, validate_windows_service_video_save_directory};
+    use super::{
+        ongrow_custom_id_proof_payload, sign_ongrow_custom_id_change,
+        trim_video_save_directory, validate_windows_service_video_save_directory,
+    };
+    use hbb_common::sodiumoxide::crypto::sign;
+
+    #[test]
+    fn custom_id_proof_is_bound_to_exact_change() {
+        hbb_common::sodiumoxide::init().unwrap();
+        let (public_key, secret_key) = sign::gen_keypair();
+        let proof = sign_ongrow_custom_id_change(
+            "123456789",
+            "OG-0001",
+            b"test-machine-uuid",
+            &secret_key.0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sign::verify(&proof, &public_key).unwrap(),
+            ongrow_custom_id_proof_payload(
+                "123456789",
+                "OG-0001",
+                b"test-machine-uuid",
+            ),
+        );
+        assert_ne!(
+            sign::verify(&proof, &public_key).unwrap(),
+            ongrow_custom_id_proof_payload(
+                "123456789",
+                "OG-0002",
+                b"test-machine-uuid",
+            ),
+        );
+    }
 
     #[test]
     fn trim_configured_video_save_directory() {
