@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
+import 'package:flutter_hbb/common/ongrow_support_id.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:ongrow_support_ui/ongrow_support_view.dart';
@@ -19,7 +20,12 @@ class OnGrowSupportHome extends StatefulWidget {
 
 class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     with WidgetsBindingObserver {
+  static const _maxAutomaticIdAttempts = 64;
+  static const _automaticIdResultTimeout = Duration(seconds: 30);
+
   Timer? _refreshTimer;
+  var _automaticIdAssignmentRunning = false;
+  var _automaticIdAssignmentFinishedForSession = false;
   var _canAcceptIncomingConnections = !isMacOS;
   var _snapshot = const OnGrowSupportSnapshot(
     supportId: '',
@@ -113,7 +119,71 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     if (mounted) {
       setState(() => _snapshot = next);
     }
+    _maybeAssignAutomaticSupportId(next);
     return next;
+  }
+
+  void _maybeAssignAutomaticSupportId(OnGrowSupportSnapshot snapshot) {
+    final currentId = trimID(snapshot.supportId);
+    if (isOnGrowSupportId(currentId)) {
+      _automaticIdAssignmentFinishedForSession = true;
+      return;
+    }
+    if (!snapshot.ready ||
+        currentId.isEmpty ||
+        _automaticIdAssignmentRunning ||
+        _automaticIdAssignmentFinishedForSession) {
+      return;
+    }
+
+    _automaticIdAssignmentRunning = true;
+    unawaited(_assignAutomaticSupportId());
+  }
+
+  Future<void> _assignAutomaticSupportId() async {
+    final candidates = OnGrowSupportIdCandidates();
+    try {
+      for (var attempt = 0; attempt < _maxAutomaticIdAttempts; attempt++) {
+        final candidate = candidates.next();
+        if (candidate == null) {
+          break;
+        }
+
+        await bind.mainChangeId(newId: candidate);
+        final result = await _waitForAutomaticIdResult();
+        if (result == null) {
+          debugPrint('Automatic OnGROW support ID assignment timed out');
+          return;
+        }
+        if (result.isEmpty) {
+          await _refresh();
+          return;
+        }
+        if (result != 'Not available') {
+          debugPrint(
+            'Automatic OnGROW support ID assignment failed: $result',
+          );
+          return;
+        }
+      }
+      debugPrint(
+        'Automatic OnGROW support ID assignment exhausted '
+        '$_maxAutomaticIdAttempts candidates',
+      );
+    } finally {
+      _automaticIdAssignmentRunning = false;
+      _automaticIdAssignmentFinishedForSession = true;
+    }
+  }
+
+  Future<String?> _waitForAutomaticIdResult() async {
+    final deadline = DateTime.now().add(_automaticIdResultTimeout);
+    var status = await bind.mainGetAsyncStatus();
+    while (status == ' ' && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      status = await bind.mainGetAsyncStatus();
+    }
+    return status == ' ' ? null : status;
   }
 
   Future<void> _copySupportId() async {
