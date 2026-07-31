@@ -750,6 +750,10 @@ class RustdeskImpl {
     throw UnimplementedError("mainRequestOngrowDeviceAttestation");
   }
 
+  bool mainIsOngrowControlConfiguredSync({dynamic hint}) {
+    return false;
+  }
+
   Future<String> mainSyncOngrowControl({
     required bool enrolled,
     required bool screenRecording,
