@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
+import 'package:flutter_hbb/common/ongrow_device_enrollment.dart';
 import 'package:flutter_hbb/common/ongrow_support_id.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -24,6 +26,8 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   static const _automaticIdResultTimeout = Duration(seconds: 30);
 
   Timer? _refreshTimer;
+  final _controlSchedule = OnGrowEnrollmentSchedule();
+  final _random = Random.secure();
   var _automaticIdAssignmentRunning = false;
   var _automaticIdAssignmentFinishedForSession = false;
   var _canAcceptIncomingConnections = !isMacOS;
@@ -60,6 +64,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _controlSchedule.resume(DateTime.now());
       _refresh();
       _refreshNetworkPermission();
     }
@@ -120,7 +125,54 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       setState(() => _snapshot = next);
     }
     _maybeAssignAutomaticSupportId(next);
+    _maybeSyncControlPlane(next);
     return next;
+  }
+
+  void _maybeSyncControlPlane(OnGrowSupportSnapshot snapshot) {
+    final id = trimID(snapshot.supportId);
+    if (!_controlSchedule.shouldStart(
+      online: snapshot.ready,
+      deviceId: id,
+      now: DateTime.now(),
+    )) {
+      return;
+    }
+    unawaited(_syncControlPlane(snapshot));
+  }
+
+  Future<void> _syncControlPlane(OnGrowSupportSnapshot snapshot) async {
+    try {
+      final raw = await bind.mainSyncOngrowControl(
+        enrolled: _controlSchedule.enrolled,
+        screenRecording: snapshot.canRecordScreen,
+        accessibility: snapshot.isProcessTrusted,
+        inputMonitoring: snapshot.canMonitorInput,
+        audioRecording: snapshot.canRecordAudio,
+        network: snapshot.canAcceptIncomingConnections,
+      );
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('invalid control response');
+      }
+      final result = OnGrowControlSyncResult.fromJson(decoded);
+      if (result.success && result.enrolled) {
+        _controlSchedule.success(DateTime.now());
+        return;
+      }
+      _controlSchedule.failure(
+        DateTime.now(),
+        retryable: result.retryable,
+        jitter: _random.nextDouble(),
+        reenrollmentRequired: result.error == 'reenrollment_required',
+      );
+    } catch (_) {
+      _controlSchedule.failure(
+        DateTime.now(),
+        retryable: true,
+        jitter: _random.nextDouble(),
+      );
+    }
   }
 
   void _maybeAssignAutomaticSupportId(OnGrowSupportSnapshot snapshot) {

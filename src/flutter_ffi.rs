@@ -949,6 +949,26 @@ pub fn main_request_ongrow_device_attestation() -> String {
     request_ongrow_device_attestation()
 }
 
+pub fn main_sync_ongrow_control(
+    enrolled: bool,
+    screen_recording: bool,
+    accessibility: bool,
+    input_monitoring: bool,
+    audio_recording: bool,
+    network: bool,
+) -> String {
+    crate::ongrow_control::sync(
+        enrolled,
+        crate::ongrow_control::Permissions {
+            screen_recording,
+            accessibility,
+            input_monitoring,
+            audio_recording,
+            network,
+        },
+    )
+}
+
 pub fn main_get_async_status() -> String {
     get_async_job_status()
 }

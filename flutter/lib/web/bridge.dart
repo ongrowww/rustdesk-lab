@@ -750,6 +750,18 @@ class RustdeskImpl {
     throw UnimplementedError("mainRequestOngrowDeviceAttestation");
   }
 
+  Future<String> mainSyncOngrowControl({
+    required bool enrolled,
+    required bool screenRecording,
+    required bool accessibility,
+    required bool inputMonitoring,
+    required bool audioRecording,
+    required bool network,
+    dynamic hint,
+  }) {
+    throw UnimplementedError("mainSyncOngrowControl");
+  }
+
   Future<String> mainGetAsyncStatus({dynamic hint}) {
     throw UnimplementedError("mainGetAsyncStatus");
   }
