@@ -28,6 +28,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   Timer? _refreshTimer;
   final _controlSchedule = OnGrowEnrollmentSchedule();
   final _random = Random.secure();
+  var _controlPlaneConfigured = false;
   var _automaticIdAssignmentRunning = false;
   var _automaticIdAssignmentFinishedForSession = false;
   var _canAcceptIncomingConnections = !isMacOS;
@@ -45,6 +46,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _controlPlaneConfigured = bind.mainIsOngrowControlConfiguredSync();
     _loadVersion();
     _refresh();
     _refreshNetworkPermission();
@@ -130,6 +132,9 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   }
 
   void _maybeSyncControlPlane(OnGrowSupportSnapshot snapshot) {
+    if (!_controlPlaneConfigured) {
+      return;
+    }
     final id = trimID(snapshot.supportId);
     if (!_controlSchedule.shouldStart(
       online: snapshot.ready,

@@ -322,12 +322,14 @@ jobs:
         shell: bash
         run: |
           RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
+          RUSTDESK_SMOKE_LOG="$RUNNER_TEMP/ongrow-support-desk-smoke.log"
           RUSTDESK_EXECUTABLE="$(
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
               "$RUSTDESK_APP_PATH/Contents/Info.plist"
           )"
-          "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
-            >/dev/null 2>&1 &
+          RUST_BACKTRACE=1 NSUnbufferedIO=YES \
+            "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
+            >"$RUSTDESK_SMOKE_LOG" 2>&1 &
           RUSTDESK_PID=$!
           cleanup() {
             kill "$RUSTDESK_PID" 2>/dev/null || true
@@ -342,6 +344,10 @@ jobs:
               RUSTDESK_EXIT=$?
             fi
             echo "RustDesk exited during launch smoke test: $RUSTDESK_EXIT"
+            sed -n '1,240p' "$RUSTDESK_SMOKE_LOG"
+            find "$HOME/Library/Logs/DiagnosticReports" \
+              -type f -mmin -5 -print \
+              -exec tail -n 160 {} \; 2>/dev/null || true
             exit 1
           fi
 

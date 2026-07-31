@@ -100,6 +100,10 @@ pub async fn sync(enrolled: bool, permissions: Permissions) -> String {
     })
 }
 
+pub fn configured() -> bool {
+    control_plane_url().is_some()
+}
+
 async fn sync_inner(
     enrolled: bool,
     permissions: Permissions,

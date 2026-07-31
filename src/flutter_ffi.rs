@@ -949,6 +949,10 @@ pub fn main_request_ongrow_device_attestation() -> String {
     request_ongrow_device_attestation()
 }
 
+pub fn main_is_ongrow_control_configured_sync() -> SyncReturn<bool> {
+    SyncReturn(crate::ongrow_control::configured())
+}
+
 pub fn main_sync_ongrow_control(
     enrolled: bool,
     screen_recording: bool,
