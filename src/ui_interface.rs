@@ -1686,7 +1686,7 @@ struct OnGrowDeviceAttestationRequestResult {
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn request_ongrow_device_attestation() -> String {
-    let result = match request_ongrow_device_attestation_().await {
+    let result = match request_ongrow_device_attestation_inner().await {
         Ok(attestation) => OnGrowDeviceAttestationRequestResult {
             attestation,
             error: String::new(),
@@ -1702,7 +1702,7 @@ pub async fn request_ongrow_device_attestation() -> String {
 }
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
-async fn request_ongrow_device_attestation_() -> Result<String, &'static str> {
+pub(crate) async fn request_ongrow_device_attestation_inner() -> Result<String, &'static str> {
     let id = get_id();
     if !hbb_common::is_valid_custom_id(&id) {
         return Err("invalid_device_id");

@@ -59,6 +59,9 @@ mod whiteboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod updater;
 
+#[cfg(feature = "flutter")]
+mod ongrow_control;
+
 mod ui_cm_interface;
 mod ui_interface;
 mod ui_session_interface;
