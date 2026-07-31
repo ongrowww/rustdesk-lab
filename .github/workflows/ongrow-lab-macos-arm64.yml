@@ -20,6 +20,7 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  ONGROW_CONTROL_PLANE_URL: "${{ vars.ONGROW_CONTROL_PLANE_URL }}"
 
 jobs:
   generate-bridge:
@@ -88,9 +89,12 @@ jobs:
           pushd flutter
           flutter pub get
           flutter test --no-pub test/ongrow_device_attestation_test.dart
+          flutter test --no-pub test/ongrow_device_enrollment_test.dart
           flutter analyze --no-pub \
             lib/common/ongrow_device_attestation.dart \
-            test/ongrow_device_attestation_test.dart
+            lib/common/ongrow_device_enrollment.dart \
+            test/ongrow_device_attestation_test.dart \
+            test/ongrow_device_enrollment_test.dart
           popd
 
       - name: Generate Flutter Rust Bridge files
@@ -247,6 +251,8 @@ jobs:
         run: |
           cargo test --locked --lib --features flutter \
             ui_interface::tests
+          cargo test --locked --lib --features flutter \
+            ongrow_control
 
       - name: Build RustDesk
         shell: bash
