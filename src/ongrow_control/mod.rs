@@ -3,6 +3,7 @@ use hbb_common::{
     protobuf::Message as _,
     rendezvous_proto::OnGrowDeviceAttestation,
     sodiumoxide::{crypto::sign, randombytes},
+    tokio,
 };
 use reqwest::{Client, StatusCode};
 use serde_derive::Serialize;
