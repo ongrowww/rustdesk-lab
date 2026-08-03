@@ -1703,7 +1703,10 @@ pub async fn request_ongrow_device_attestation() -> String {
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 pub(crate) async fn request_ongrow_device_attestation_inner() -> Result<String, &'static str> {
-    let id = get_id();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let id = crate::ipc::get_id_async(1_000).await;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let id = Config::get_id();
     if !hbb_common::is_valid_custom_id(&id) {
         return Err("invalid_device_id");
     }
