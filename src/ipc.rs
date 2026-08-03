@@ -1736,6 +1736,25 @@ pub fn get_id() -> String {
     Config::get_id()
 }
 
+pub async fn get_id_async(ms_timeout: u64) -> String {
+    // Keep the asynchronous path separate from `get_id()`: callers that
+    // already run inside Tokio must not enter the `#[tokio::main]` wrapper in
+    // `get_config()` and create a nested runtime.
+    if let Ok(Some(v)) = get_config_async("id", ms_timeout).await {
+        if !v.is_empty() {
+            if let Ok(Some(v2)) = get_config_async("salt", ms_timeout).await {
+                Config::set_salt(&v2);
+            }
+            if v != Config::get_id() {
+                Config::set_key_confirmed(false);
+                Config::set_id(&v);
+            }
+            return v;
+        }
+    }
+    Config::get_id()
+}
+
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
         let mut urls = v.split(",");

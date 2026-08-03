@@ -115,7 +115,7 @@ async fn sync_inner(
         return Err(SyncResult::error("offline", true));
     }
 
-    let device_id = crate::ui_interface::get_id();
+    let device_id = crate::ipc::get_id_async(1_000).await;
     if !is_ongrow_id(&device_id) {
         return Err(SyncResult::error("invalid_device_id", true));
     }
