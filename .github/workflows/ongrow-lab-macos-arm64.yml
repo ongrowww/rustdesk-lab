@@ -90,11 +90,14 @@ jobs:
           flutter pub get
           flutter test --no-pub test/ongrow_device_attestation_test.dart
           flutter test --no-pub test/ongrow_device_enrollment_test.dart
+          flutter test --no-pub test/ongrow_support_view_test.dart
           flutter analyze --no-pub \
             lib/common/ongrow_device_attestation.dart \
             lib/common/ongrow_device_enrollment.dart \
+            packages/ongrow_support_ui/lib/ongrow_support_view.dart \
             test/ongrow_device_attestation_test.dart \
-            test/ongrow_device_enrollment_test.dart
+            test/ongrow_device_enrollment_test.dart \
+            test/ongrow_support_view_test.dart
           popd
 
       - name: Generate Flutter Rust Bridge files

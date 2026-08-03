@@ -32,8 +32,6 @@ class OnGrowSupportSnapshot {
   final bool canAcceptIncomingConnections;
   final String version;
 
-  bool get canControl => isProcessTrusted && canMonitorInput;
-
   OnGrowSupportSnapshot copyWith({
     String? supportId,
     bool? ready,
@@ -452,9 +450,20 @@ class _PermissionsColumn extends StatelessWidget {
                 icon: Icons.accessibility_new_rounded,
                 iconColor: ongrowViolet,
                 title: 'Bedienungshilfen',
-                detail: 'Erlaubt Maus- und Tastatursteuerung',
-                granted: snapshot.canControl,
-                onPressed: snapshot.canControl ? null : () => openHelp(1),
+                detail: 'Erlaubt die Fernsteuerung von Maus und Tastatur',
+                granted: snapshot.isProcessTrusted,
+                onPressed:
+                    snapshot.isProcessTrusted ? null : () => openHelp(1),
+              ),
+              const SizedBox(height: 10),
+              _PermissionOverviewRow(
+                icon: Icons.keyboard_alt_outlined,
+                iconColor: const Color(0xFF5A4B6C),
+                title: 'Eingabeüberwachung',
+                detail: 'Erkennt lokale Eingaben während des Supports',
+                granted: snapshot.canMonitorInput,
+                onPressed:
+                    snapshot.canMonitorInput ? null : () => openHelp(2),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -467,7 +476,7 @@ class _PermissionsColumn extends StatelessWidget {
                     snapshot.canAcceptIncomingConnections ? null : 'Prüfen →',
                 onPressed: snapshot.canAcceptIncomingConnections
                     ? null
-                    : () => openHelp(2),
+                    : () => openHelp(3),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -477,7 +486,7 @@ class _PermissionsColumn extends StatelessWidget {
                 detail: 'Nur für Sprachübertragung erforderlich',
                 granted: snapshot.canRecordAudio,
                 optional: true,
-                onPressed: () => openHelp(3),
+                onPressed: () => openHelp(4),
               ),
             ],
           ),
@@ -1093,51 +1102,38 @@ class _OnGrowPermissionHelpDialogState
                     _HelpStep(
                       title: 'Bedienungshilfen',
                       icon: Icons.accessibility_new_rounded,
-                      complete: _snapshot.canControl,
+                      complete: _snapshot.isProcessTrusted,
                       expanded: _expandedStep == 1,
                       onToggle: () => setState(() => _expandedStep = 1),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const Text(
-                            'Für Maus- und Tastatursteuerung benötigt macOS '
-                            'zwei getrennte Freigaben:',
-                            style: TextStyle(
-                              color: Color(0xFF302736),
-                              fontSize: 12,
-                              height: 1.4,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _SettingsAction(
-                            label: _snapshot.isProcessTrusted
-                                ? '✓ Bedienungshilfen erlaubt'
-                                : 'Bedienungshilfen öffnen',
-                            busy: _busy,
-                            onPressed: () =>
-                                _run(widget.actions.requestAccessibility),
-                          ),
-                          const SizedBox(height: 8),
-                          _SettingsAction(
-                            label: _snapshot.canMonitorInput
-                                ? '✓ Eingabeüberwachung erlaubt'
-                                : 'Eingabeüberwachung öffnen',
-                            busy: _busy,
-                            secondary: true,
-                            onPressed: () =>
-                                _run(widget.actions.requestInputMonitoring),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Aktiviere OnGROW Support Desk in beiden Listen. '
-                            'macOS kann anschließend einen Neustart der App verlangen.',
-                            style: TextStyle(
-                              color: Color(0xFF6B6470),
-                              fontSize: 11,
-                              height: 1.35,
-                            ),
-                          ),
+                      child: _StepInstructions(
+                        instructions: const [
+                          'Systemeinstellungen öffnen.',
+                          'Datenschutz & Sicherheit → Bedienungshilfen wählen.',
+                          'OnGROW Support Desk aktivieren.',
                         ],
+                        buttonLabel: 'Bedienungshilfen öffnen',
+                        busy: _busy,
+                        onPressed: () =>
+                            _run(widget.actions.requestAccessibility),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _HelpStep(
+                      title: 'Eingabeüberwachung',
+                      icon: Icons.keyboard_alt_outlined,
+                      complete: _snapshot.canMonitorInput,
+                      expanded: _expandedStep == 2,
+                      onToggle: () => setState(() => _expandedStep = 2),
+                      child: _StepInstructions(
+                        instructions: const [
+                          'Systemeinstellungen öffnen.',
+                          'Datenschutz & Sicherheit → Eingabeüberwachung wählen.',
+                          'OnGROW Support Desk aktivieren.',
+                        ],
+                        buttonLabel: 'Eingabeüberwachung öffnen',
+                        busy: _busy,
+                        onPressed: () =>
+                            _run(widget.actions.requestInputMonitoring),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -1148,8 +1144,8 @@ class _OnGrowPermissionHelpDialogState
                       statusLabel: _snapshot.canAcceptIncomingConnections
                           ? null
                           : 'Bei Nachfrage',
-                      expanded: _expandedStep == 2,
-                      onToggle: () => setState(() => _expandedStep = 2),
+                      expanded: _expandedStep == 3,
+                      onToggle: () => setState(() => _expandedStep = 3),
                       child: _StepInstructions(
                         instructions: const [
                           'Erlaube eingehende Netzwerkverbindungen, '
@@ -1170,8 +1166,8 @@ class _OnGrowPermissionHelpDialogState
                       icon: Icons.mic_none_rounded,
                       complete: _snapshot.canRecordAudio,
                       optional: true,
-                      expanded: _expandedStep == 3,
-                      onToggle: () => setState(() => _expandedStep = 3),
+                      expanded: _expandedStep == 4,
+                      onToggle: () => setState(() => _expandedStep = 4),
                       child: _StepInstructions(
                         instructions: const [
                           'Diese Freigabe ist nur für Sprachübertragung nötig.',
