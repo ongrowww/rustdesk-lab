@@ -1416,13 +1416,11 @@ class _SettingsAction extends StatelessWidget {
     required this.label,
     required this.busy,
     required this.onPressed,
-    this.secondary = false,
   });
 
   final String label;
   final bool busy;
   final VoidCallback onPressed;
-  final bool secondary;
 
   @override
   Widget build(BuildContext context) {
@@ -1433,8 +1431,8 @@ class _SettingsAction extends StatelessWidget {
         icon: const Icon(Icons.settings_outlined, size: 16),
         label: Text(label),
         style: OutlinedButton.styleFrom(
-          foregroundColor: secondary ? ongrowViolet : Colors.white,
-          backgroundColor: secondary ? Colors.white : ongrowViolet,
+          foregroundColor: Colors.white,
+          backgroundColor: ongrowViolet,
           disabledForegroundColor: Colors.white70,
           disabledBackgroundColor: const Color(0xFF9D76D3),
           side: const BorderSide(color: ongrowViolet),
