@@ -25,7 +25,8 @@
 
 ## Status
 
-- **Status**: IN PROGRESS (lokale Prüfungen grün; Docker-Daemon/CI für Container-Gate fehlt)
+- **Status**: IN PROGRESS (CI-Lauf `31437160660` inklusive Container grün;
+  vollständiger isolierter Restic-Restore-Drill steht noch aus)
 - **Priorität**: P1
 - **Aufwand**: XL
 - **Risiko**: HIGH

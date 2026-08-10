@@ -14,7 +14,7 @@ aktualisiert der ausführende Agent die betreffende Statuszeile.
 | 002 | Serverbestätigte Geräteidentität einführen | P1 | L | 001 | DONE |
 | 003 | Signiertes Device-Enrollment und Heartbeat aufbauen | P1 | L | 002 | DONE (`5dfcd4a`) |
 | 004 | Authentifiziertes Admin-Inventar und Kundenzuordnung umsetzen | P1 | L | 003 | DONE (`9092319`) |
-| 005 | Vault-, RBAC- und Auditgrundlage bereitstellen | P1 | XL | 003, 004 | IN PROGRESS (lokal grün; Containerprüfung wartet auf Docker/CI) |
+| 005 | Vault-, RBAC- und Auditgrundlage bereitstellen | P1 | XL | 003, 004 | IN PROGRESS (CI inkl. Container grün; isolierter Restic-Restore-Drill ausstehend) |
 | 006 | Unbeaufsichtigten Zugriff ausdrücklich freigeben und widerrufen | P1 | XL | 002, 003, 005 | TODO |
 | 007 | Autorisierte Technikerverbindung ohne Passwortanzeige umsetzen | P1 | XL | 004, 005, 006 | TODO |
 | 008 | Produktionsfreigabe, Wiederherstellung und Compliance absichern | P1 | XL | 002–007 | TODO |
@@ -109,6 +109,12 @@ dürfen nicht als Primärschlüssel für Berechtigungen dienen.
   Server-Manager `7be4acb` und den Client `408784b9` neu geplant. Er bleibt
   eine standardmäßig deaktivierte Serverseiten-Grundlage und verändert noch
   kein Kundengerät.
+- Plan 005: Die lokale Implementierung wurde als Support-Control-Commit
+  `8eccecb` und Server-Manager-Commit `cab5384` gepusht. GitHub-Actions-Lauf
+  `31437160660` war einschließlich Web-, Format-, Go-, Race-, Vet-, Binary-
+  und Containerprüfung erfolgreich. Vor `DONE` fehlt weiterhin der
+  vollständige isolierte Restic-Restore-Drill mit Migration 004, beiden
+  nicht produktiven Test-Keyrings und `vault verify`.
 
 ## Bewusst verworfene oder vertagte Ansätze
 
