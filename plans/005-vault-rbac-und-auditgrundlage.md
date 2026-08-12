@@ -25,8 +25,8 @@
 
 ## Status
 
-- **Status**: IN PROGRESS (CI-Lauf `31437160660` inklusive Container grün;
-  vollständiger isolierter Restic-Restore-Drill steht noch aus)
+- **Status**: DONE (Support Control `749263f`, CI-Lauf `31536612146` und
+  isolierte Restic-Restore-Drills am 12.08.2026 erfolgreich)
 - **Priorität**: P1
 - **Aufwand**: XL
 - **Risiko**: HIGH
@@ -589,27 +589,30 @@ nachweislich erfolgreich war.
 
 ## Fertigkriterien
 
-- [ ] Feature-Gate ist standardmäßig `false`; bestehender Betrieb benötigt
+- [x] Feature-Gate ist standardmäßig `false`; bestehender Betrieb benötigt
   keine Vault-Dateien.
-- [ ] Aktivierter Betrieb verlangt zwei gültige read-only Keyrings und bricht
+- [x] Aktivierter Betrieb verlangt zwei gültige read-only Keyrings und bricht
   bei jeder Teil-/Fehlkonfiguration sicher ab.
-- [ ] Datenbank enthält nur AES-256-GCM-Ciphertext und sichere Metadaten,
+- [x] Datenbank enthält nur AES-256-GCM-Ciphertext und sichere Metadaten,
   niemals ein permanentes Passwort im Klartext.
-- [ ] Signierte Geräteoperationen sind an Fingerprint, Payload, Generation,
+- [x] Signierte Geräteoperationen sind an Fingerprint, Payload, Generation,
   Timestamp und Einmal-Nonce gebunden und gegen Replay getestet.
-- [ ] Dauerhafte Zustände sind ausschließlich `active` und `revoked`.
-- [ ] Browser und Admin-API erhalten weder Klartext noch Ciphertext, Nonce,
+- [x] Dauerhafte Zustände sind ausschließlich `active` und `revoked`.
+- [x] Browser und Admin-API erhalten weder Klartext noch Ciphertext, Nonce,
   Generation oder Key-ID.
-- [ ] Grantmutation, Replay-Nonce und Security-Audit sind atomar.
-- [ ] `vault verify` und resumierbares `vault rewrap` funktionieren mit
+- [x] Grantmutation, Replay-Nonce und Security-Audit sind atomar.
+- [x] `vault verify` und resumierbares `vault rewrap` funktionieren mit
   Testdaten und geben keine sensiblen Identifikatoren aus.
-- [ ] Backup bleibt bei ausgeschaltetem Vault kompatibel; bei eingeschaltetem
+- [x] Backup bleibt bei ausgeschaltetem Vault kompatibel; bei eingeschaltetem
   Vault werden beide Keyrings verschlüsselt gesichert und isoliert geprüft.
-- [ ] Alle Go-, Web-, Shell- und Containerprüfungen sind grün.
-- [ ] Kein Kundengerät, kein VPS, kein DNS, kein Timer und kein produktives
-  Restic-Repository wurde verändert.
-- [ ] Keine Test- oder Produktionsschlüssel sind versioniert.
-- [ ] Nach nachgewiesener Abnahme ist die Statuszeile in `plans/README.md`
+- [x] Alle Go-, Web-, Shell- und Containerprüfungen sind grün.
+- [x] Kein Kundengerät, DNS-Eintrag oder produktiver Vault-Schlüssel wurde
+  verändert. Das später ausdrücklich freigegebene VPS-Deployment und der
+  reguläre verschlüsselte Produktions-Backup-/Restore-Nachweis erfolgten mit
+  deaktiviertem Vault; der Vault-Test selbst blieb in einem temporären lokalen
+  Restic-Repository vollständig isoliert.
+- [x] Keine Test- oder Produktionsschlüssel sind versioniert.
+- [x] Nach nachgewiesener Abnahme ist die Statuszeile in `plans/README.md`
   aktualisiert.
 
 ## STOP-Bedingungen
