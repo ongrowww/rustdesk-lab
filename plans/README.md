@@ -14,7 +14,7 @@ aktualisiert der ausführende Agent die betreffende Statuszeile.
 | 002 | Serverbestätigte Geräteidentität einführen | P1 | L | 001 | DONE |
 | 003 | Signiertes Device-Enrollment und Heartbeat aufbauen | P1 | L | 002 | DONE (`5dfcd4a`) |
 | 004 | Authentifiziertes Admin-Inventar und Kundenzuordnung umsetzen | P1 | L | 003 | DONE (`9092319`) |
-| 005 | Vault-, RBAC- und Auditgrundlage bereitstellen | P1 | XL | 003, 004 | IN PROGRESS (CI inkl. Container grün; isolierter Restic-Restore-Drill ausstehend) |
+| 005 | Vault-, RBAC- und Auditgrundlage bereitstellen | P1 | XL | 003, 004 | DONE (`749263f`, Restore-Drills 12.08.2026) |
 | 006 | Unbeaufsichtigten Zugriff ausdrücklich freigeben und widerrufen | P1 | XL | 002, 003, 005 | TODO |
 | 007 | Autorisierte Technikerverbindung ohne Passwortanzeige umsetzen | P1 | XL | 004, 005, 006 | TODO |
 | 008 | Produktionsfreigabe, Wiederherstellung und Compliance absichern | P1 | XL | 002–007 | TODO |
@@ -111,10 +111,17 @@ dürfen nicht als Primärschlüssel für Berechtigungen dienen.
   kein Kundengerät.
 - Plan 005: Die lokale Implementierung wurde als Support-Control-Commit
   `8eccecb` und Server-Manager-Commit `cab5384` gepusht. GitHub-Actions-Lauf
-  `31437160660` war einschließlich Web-, Format-, Go-, Race-, Vet-, Binary-
-  und Containerprüfung erfolgreich. Vor `DONE` fehlt weiterhin der
-  vollständige isolierte Restic-Restore-Drill mit Migration 004, beiden
-  nicht produktiven Test-Keyrings und `vault verify`.
+  `31536612146` war einschließlich Web-, Format-, Go-, Race-, Vet-, Binary-
+  und Containerprüfung erfolgreich. Support-Control-PR #1 wurde als
+  `749263f` gemergt, der Backup-Patch über Server-Manager-PR #20 in seinen
+  tatsächlichen Authentik-Basiszweig integriert. Am 12.08.2026 wurden der
+  weiterhin deaktivierte Produktions-Vault, Migration 004 und ein regulärer
+  Restic-Restore des Snapshots `36511006` erfolgreich geprüft. Ein zweiter,
+  vollständig isolierter Drill verwendete ein temporäres lokales
+  Restic-Repository, zwei nicht produktive Test-Keyrings und einen echten
+  AES-256-GCM-Testciphertext; `vault verify`, Start mit `--network none` und
+  alle Restore-Marker waren erfolgreich. Testschlüssel und Test-Repository
+  wurden anschließend entfernt.
 
 ## Bewusst verworfene oder vertagte Ansätze
 
