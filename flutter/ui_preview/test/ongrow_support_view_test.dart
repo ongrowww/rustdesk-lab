@@ -37,23 +37,112 @@ Widget _app(
 
 OnGrowSupportActions _actions({
   Future<void> Function()? requestSupport,
+  VoidCallback? openSettings,
   Future<void> Function()? openNetworkSettings,
   Future<OnGrowSupportSnapshot> Function()? refresh,
+  Future<void> Function()? enableUnattended,
+  Future<void> Function()? revokeUnattended,
 }) {
   return OnGrowSupportActions(
     copySupportId: () async {},
     requestSupport: requestSupport ?? () async {},
-    openSettings: () {},
+    openSettings: openSettings ?? () {},
     requestScreenRecording: () async {},
     requestAccessibility: () async {},
     requestInputMonitoring: () async {},
     requestMicrophone: () async {},
     openNetworkSettings: openNetworkSettings ?? () async {},
     refresh: refresh ?? () async => _snapshot,
+    enableUnattended: enableUnattended ?? () async {},
+    revokeUnattended: revokeUnattended ?? () async {},
   );
 }
 
 void main() {
+  testWidgets('requires explicit confirmation before unattended access',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var enabled = 0;
+    await tester.pumpWidget(
+      _app(
+        _actions(enableUnattended: () async => enabled += 1),
+      ),
+    );
+
+    await tester.ensureVisible(find.text('Zugriff für OnGROW freigeben'));
+    await tester.tap(find.text('Zugriff für OnGROW freigeben'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unbeaufsichtigten Zugriff freigeben?'), findsOneWidget);
+    expect(enabled, 0);
+
+    await tester.tap(find.text('Sicher freigeben'));
+    await tester.pumpAndSettle();
+    expect(enabled, 1);
+  });
+
+  testWidgets('requires confirmation before revoking unattended access',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var revoked = 0;
+    await tester.pumpWidget(
+      _app(
+        _actions(revokeUnattended: () async => revoked += 1),
+        snapshot: _snapshot.copyWith(
+          unattendedStatus: OnGrowUnattendedStatus.enabled,
+        ),
+      ),
+    );
+
+    await tester.ensureVisible(find.text('Zugriff widerrufen'));
+    await tester.tap(find.text('Zugriff widerrufen'));
+    await tester.pumpAndSettle();
+    expect(find.text('Zugriff wirklich widerrufen?'), findsOneWidget);
+    expect(revoked, 0);
+
+    await tester.tap(find.text('Zugriff widerrufen').last);
+    await tester.pumpAndSettle();
+    expect(revoked, 1);
+  });
+
+  testWidgets('never overwrites an existing permanent password',
+      (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var settingsOpened = 0;
+    var enableAttempts = 0;
+    await tester.pumpWidget(
+      _app(
+        _actions(
+          openSettings: () => settingsOpened += 1,
+          enableUnattended: () async => enableAttempts += 1,
+        ),
+        snapshot: _snapshot.copyWith(
+          unattendedStatus: OnGrowUnattendedStatus.actionRequired,
+          unattendedError: 'existing_password_conflict',
+        ),
+      ),
+    );
+
+    await tester.ensureVisible(find.text('RustDesk-Einstellungen öffnen'));
+    await tester.tap(find.text('RustDesk-Einstellungen öffnen'));
+    await tester.pumpAndSettle();
+
+    expect(settingsOpened, 1);
+    expect(enableAttempts, 0);
+    expect(find.text('Unbeaufsichtigten Zugriff freigeben?'), findsNothing);
+  });
+
   testWidgets('prepares the support email from the contact modal',
       (tester) async {
     tester.view.physicalSize = const Size(1200, 800);
@@ -165,6 +254,6 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
 
-    expect(find.text('Erledigt'), findsNWidgets(4));
+    expect(find.text('Erledigt'), findsNWidgets(5));
   });
 }

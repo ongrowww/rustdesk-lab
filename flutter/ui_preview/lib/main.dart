@@ -110,6 +110,24 @@ class _PreviewScreenState extends State<_PreviewScreen> {
                 _message('Preview: Netzwerkeinstellungen würden geöffnet');
               },
               refresh: _refresh,
+              enableUnattended: () async {
+                setState(() => _snapshot = _snapshot.copyWith(
+                      unattendedStatus: OnGrowUnattendedStatus.preparing,
+                    ));
+                await Future<void>.delayed(const Duration(milliseconds: 600));
+                setState(() => _snapshot = _snapshot.copyWith(
+                      unattendedStatus: OnGrowUnattendedStatus.enabled,
+                    ));
+              },
+              revokeUnattended: () async {
+                setState(() => _snapshot = _snapshot.copyWith(
+                      unattendedStatus: OnGrowUnattendedStatus.revoking,
+                    ));
+                await Future<void>.delayed(const Duration(milliseconds: 600));
+                setState(() => _snapshot = _snapshot.copyWith(
+                      unattendedStatus: OnGrowUnattendedStatus.notGranted,
+                    ));
+              },
             ),
           ),
         ),

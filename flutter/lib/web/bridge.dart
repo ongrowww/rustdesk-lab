@@ -766,6 +766,25 @@ class RustdeskImpl {
     throw UnimplementedError("mainSyncOngrowControl");
   }
 
+  Future<String> mainGetOngrowUnattendedStatus({dynamic hint}) {
+    throw UnimplementedError("mainGetOngrowUnattendedStatus");
+  }
+
+  Future<String> mainEnableOngrowUnattended({
+    required bool screenRecording,
+    required bool accessibility,
+    required bool inputMonitoring,
+    required bool audioRecording,
+    required bool network,
+    dynamic hint,
+  }) {
+    throw UnimplementedError("mainEnableOngrowUnattended");
+  }
+
+  Future<String> mainRevokeOngrowUnattended({dynamic hint}) {
+    throw UnimplementedError("mainRevokeOngrowUnattended");
+  }
+
   Future<String> mainGetAsyncStatus({dynamic hint}) {
     throw UnimplementedError("mainGetAsyncStatus");
   }
