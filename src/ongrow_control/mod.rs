@@ -70,7 +70,7 @@ impl Default for UnattendedLocalState {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct UnattendedActionResult {
     success: bool,
     status: &'static str,
