@@ -10,6 +10,15 @@ const ongrowMuted = Color(0xFF61596B);
 const ongrowCanvas = Color(0xFFFCFCFE);
 const ongrowSurface = Color(0xFFF9F8FB);
 
+enum OnGrowUnattendedStatus {
+  notGranted,
+  preparing,
+  enabled,
+  actionRequired,
+  revoking,
+  error,
+}
+
 @immutable
 class OnGrowSupportSnapshot {
   const OnGrowSupportSnapshot({
@@ -21,6 +30,8 @@ class OnGrowSupportSnapshot {
     required this.canRecordAudio,
     required this.canAcceptIncomingConnections,
     this.version = '',
+    this.unattendedStatus = OnGrowUnattendedStatus.notGranted,
+    this.unattendedError = '',
   });
 
   final String supportId;
@@ -31,6 +42,8 @@ class OnGrowSupportSnapshot {
   final bool canRecordAudio;
   final bool canAcceptIncomingConnections;
   final String version;
+  final OnGrowUnattendedStatus unattendedStatus;
+  final String unattendedError;
 
   OnGrowSupportSnapshot copyWith({
     String? supportId,
@@ -41,6 +54,8 @@ class OnGrowSupportSnapshot {
     bool? canRecordAudio,
     bool? canAcceptIncomingConnections,
     String? version,
+    OnGrowUnattendedStatus? unattendedStatus,
+    String? unattendedError,
   }) {
     return OnGrowSupportSnapshot(
       supportId: supportId ?? this.supportId,
@@ -52,6 +67,8 @@ class OnGrowSupportSnapshot {
       canAcceptIncomingConnections:
           canAcceptIncomingConnections ?? this.canAcceptIncomingConnections,
       version: version ?? this.version,
+      unattendedStatus: unattendedStatus ?? this.unattendedStatus,
+      unattendedError: unattendedError ?? this.unattendedError,
     );
   }
 }
@@ -67,6 +84,8 @@ class OnGrowSupportActions {
     required this.requestMicrophone,
     required this.openNetworkSettings,
     required this.refresh,
+    required this.enableUnattended,
+    required this.revokeUnattended,
   });
 
   final Future<void> Function() copySupportId;
@@ -78,6 +97,8 @@ class OnGrowSupportActions {
   final Future<void> Function() requestMicrophone;
   final Future<void> Function() openNetworkSettings;
   final Future<OnGrowSupportSnapshot> Function() refresh;
+  final Future<void> Function() enableUnattended;
+  final Future<void> Function() revokeUnattended;
 }
 
 class OnGrowSupportView extends StatelessWidget {
@@ -124,25 +145,37 @@ class OnGrowSupportView extends StatelessWidget {
                   openHelp: (step) =>
                       _showPermissionHelp(context, initialStep: step),
                 );
+                final primary = compact
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          left,
+                          const SizedBox(height: 28),
+                          right,
+                        ],
+                      )
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: left),
+                          const SizedBox(width: 44),
+                          Expanded(child: right),
+                        ],
+                      );
                 return SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(40, 34, 40, 30),
-                  child: compact
-                      ? Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            left,
-                            const SizedBox(height: 28),
-                            right,
-                          ],
-                        )
-                      : Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: left),
-                            const SizedBox(width: 44),
-                            Expanded(child: right),
-                          ],
-                        ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      primary,
+                      const SizedBox(height: 24),
+                      _UnattendedAccessCard(
+                        snapshot: snapshot,
+                        actions: actions,
+                        openPermissionHelp: () => _showPermissionHelp(context),
+                      ),
+                    ],
+                  ),
                 );
               },
             ),
@@ -452,8 +485,7 @@ class _PermissionsColumn extends StatelessWidget {
                 title: 'Bedienungshilfen',
                 detail: 'Erlaubt die Fernsteuerung von Maus und Tastatur',
                 granted: snapshot.isProcessTrusted,
-                onPressed:
-                    snapshot.isProcessTrusted ? null : () => openHelp(1),
+                onPressed: snapshot.isProcessTrusted ? null : () => openHelp(1),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -462,8 +494,7 @@ class _PermissionsColumn extends StatelessWidget {
                 title: 'Eingabeüberwachung',
                 detail: 'Erkennt lokale Eingaben während des Supports',
                 granted: snapshot.canMonitorInput,
-                onPressed:
-                    snapshot.canMonitorInput ? null : () => openHelp(2),
+                onPressed: snapshot.canMonitorInput ? null : () => openHelp(2),
               ),
               const SizedBox(height: 10),
               _PermissionOverviewRow(
@@ -623,6 +654,377 @@ class _StatusPill extends StatelessWidget {
         onTap: onPressed,
         child: content,
       ),
+    );
+  }
+}
+
+class _UnattendedAccessCard extends StatelessWidget {
+  const _UnattendedAccessCard({
+    required this.snapshot,
+    required this.actions,
+    required this.openPermissionHelp,
+  });
+
+  final OnGrowSupportSnapshot snapshot;
+  final OnGrowSupportActions actions;
+  final VoidCallback openPermissionHelp;
+
+  Future<void> _confirmEnable(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: const Color(0x940E0919),
+      builder: (_) => const _ConfirmUnattendedDialog(enable: true),
+    );
+    if (confirmed == true) {
+      await actions.enableUnattended();
+    }
+  }
+
+  Future<void> _confirmRevoke(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: const Color(0x940E0919),
+      builder: (_) => const _ConfirmUnattendedDialog(enable: false),
+    );
+    if (confirmed == true) {
+      await actions.revokeUnattended();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = _UnattendedPresentation.from(snapshot);
+    final busy =
+        snapshot.unattendedStatus == OnGrowUnattendedStatus.preparing ||
+            snapshot.unattendedStatus == OnGrowUnattendedStatus.revoking;
+    final requiresManualSettings = {
+      'existing_password_conflict',
+      'password_ownership_changed',
+      'password_ownership_unverified',
+      'rollback_failed',
+      'local_revoke_failed',
+      'local_state_invalid',
+    }.contains(snapshot.unattendedError);
+    VoidCallback? action;
+    if (!busy) {
+      if (requiresManualSettings) {
+        action = actions.openSettings;
+      } else if (snapshot.unattendedStatus == OnGrowUnattendedStatus.enabled ||
+          (snapshot.unattendedStatus == OnGrowUnattendedStatus.actionRequired &&
+              (snapshot.unattendedError == 'local_password_missing' ||
+                  snapshot.unattendedError == 'local_settings_changed'))) {
+        action = () => _confirmRevoke(context);
+      } else if (snapshot.unattendedStatus ==
+              OnGrowUnattendedStatus.actionRequired &&
+          snapshot.unattendedError == 'permissions_incomplete') {
+        action = openPermissionHelp;
+      } else {
+        action = () => _confirmEnable(context);
+      }
+    }
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: 'Unbeaufsichtigter Zugriff: ${presentation.badge}',
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+        decoration: BoxDecoration(
+          color: ongrowSurface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFE3DFE9)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: presentation.foreground,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const Text(
+                  'Unbeaufsichtigter Zugriff',
+                  style: TextStyle(
+                    color: ongrowInk,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                _StatusPill(
+                  label: presentation.badge,
+                  background: presentation.background,
+                  foreground: presentation.foreground,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              presentation.description,
+              style: const TextStyle(
+                color: ongrowMuted,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (busy)
+              Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: presentation.foreground,
+                    ),
+                  ),
+                  const SizedBox(width: 9),
+                  Text(
+                    presentation.actionLabel,
+                    style: const TextStyle(
+                      color: ongrowMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              )
+            else
+              OutlinedButton(
+                onPressed: action,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: snapshot.unattendedStatus ==
+                          OnGrowUnattendedStatus.enabled
+                      ? ongrowInk
+                      : Colors.white,
+                  backgroundColor: snapshot.unattendedStatus ==
+                          OnGrowUnattendedStatus.enabled
+                      ? Colors.white
+                      : ongrowViolet,
+                  side: BorderSide(
+                    color: snapshot.unattendedStatus ==
+                            OnGrowUnattendedStatus.enabled
+                        ? const Color(0xFFE3DFE9)
+                        : ongrowViolet,
+                  ),
+                  minimumSize: const Size(48, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                child: Text(presentation.actionLabel),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UnattendedPresentation {
+  const _UnattendedPresentation({
+    required this.badge,
+    required this.description,
+    required this.actionLabel,
+    required this.background,
+    required this.foreground,
+  });
+
+  final String badge;
+  final String description;
+  final String actionLabel;
+  final Color background;
+  final Color foreground;
+
+  factory _UnattendedPresentation.from(OnGrowSupportSnapshot snapshot) {
+    switch (snapshot.unattendedStatus) {
+      case OnGrowUnattendedStatus.preparing:
+        return const _UnattendedPresentation(
+          badge: 'Wird vorbereitet',
+          description:
+              'Das Gerätepasswort wird lokal erzeugt und verschlüsselt an OnGROW übertragen.',
+          actionLabel: 'Bitte einen Moment warten …',
+          background: Color(0xFFEDE6FB),
+          foreground: Color(0xFF6541C7),
+        );
+      case OnGrowUnattendedStatus.enabled:
+        return const _UnattendedPresentation(
+          badge: 'Freigegeben',
+          description:
+              'OnGROW darf bei Supportbedarf auch ohne anwesende Person auf dieses Gerät zugreifen.',
+          actionLabel: 'Zugriff widerrufen',
+          background: Color(0xFFE8F9BE),
+          foreground: Color(0xFF4F6400),
+        );
+      case OnGrowUnattendedStatus.actionRequired:
+        return _UnattendedPresentation(
+          badge: 'Aktion erforderlich',
+          description: _unattendedErrorText(snapshot.unattendedError),
+          actionLabel: switch (snapshot.unattendedError) {
+            'existing_password_conflict' => 'RustDesk-Einstellungen öffnen',
+            'password_ownership_changed' => 'RustDesk-Einstellungen öffnen',
+            'password_ownership_unverified' => 'RustDesk-Einstellungen öffnen',
+            'rollback_failed' => 'RustDesk-Einstellungen öffnen',
+            'local_revoke_failed' => 'RustDesk-Einstellungen öffnen',
+            'local_state_invalid' => 'RustDesk-Einstellungen öffnen',
+            'permissions_incomplete' => 'Einrichtungshilfe öffnen',
+            'local_password_missing' ||
+            'local_settings_changed' =>
+              'Freigabe zurücksetzen',
+            _ => 'Einrichtung fortsetzen',
+          },
+          background: const Color(0xFFFFF3D6),
+          foreground: const Color(0xFF7A4D00),
+        );
+      case OnGrowUnattendedStatus.revoking:
+        return const _UnattendedPresentation(
+          badge: 'Wird widerrufen',
+          description:
+              'Der lokale Zugriff ist gesperrt. Die Serverbestätigung wird noch abgeschlossen.',
+          actionLabel: 'Bitte einen Moment warten …',
+          background: Color(0xFFEDE6FB),
+          foreground: Color(0xFF6541C7),
+        );
+      case OnGrowUnattendedStatus.error:
+        return _UnattendedPresentation(
+          badge: 'Fehler',
+          description: _unattendedErrorText(snapshot.unattendedError),
+          actionLabel: {
+            'password_ownership_unverified',
+            'rollback_failed',
+            'local_revoke_failed',
+            'local_state_invalid',
+          }.contains(snapshot.unattendedError)
+              ? 'RustDesk-Einstellungen öffnen'
+              : 'Erneut versuchen',
+          background: const Color(0xFFFDE9EC),
+          foreground: const Color(0xFFA12B3A),
+        );
+      case OnGrowUnattendedStatus.notGranted:
+        return const _UnattendedPresentation(
+          badge: 'Nicht freigegeben',
+          description:
+              'OnGROW kann erst nach deiner ausdrücklichen Freigabe ohne eine Bestätigung vor Ort helfen.',
+          actionLabel: 'Zugriff für OnGROW freigeben',
+          background: Color(0xFFEDEBF0),
+          foreground: Color(0xFF5C5463),
+        );
+    }
+  }
+}
+
+String _unattendedErrorText(String error) {
+  switch (error) {
+    case 'existing_password_conflict':
+      return 'Es ist bereits ein anderes permanentes Passwort eingerichtet. OnGROW verändert es nicht.';
+    case 'password_ownership_changed':
+      return 'Das permanente Passwort wurde nach der Freigabe geändert. OnGROW verändert oder löscht es nicht.';
+    case 'password_ownership_unverified':
+    case 'rollback_failed':
+    case 'local_revoke_failed':
+      return 'Der Zugriff konnte nicht vollständig zurückgesetzt werden. Öffne die RustDesk-Einstellungen und entferne das permanente Passwort manuell.';
+    case 'local_state_invalid':
+      return 'Der lokale Freigabestatus ist beschädigt. Prüfe das permanente Passwort in den RustDesk-Einstellungen.';
+    case 'permissions_incomplete':
+      return 'Für die Freigabe fehlen erforderliche Mac-Berechtigungen. Öffne zuerst die Einrichtungshilfe.';
+    case 'local_password_missing':
+    case 'local_settings_changed':
+      return 'Die lokale Freigabe wurde verändert und muss erneut geprüft werden.';
+    case 'service_unavailable':
+      return 'Der installierte Supportdienst antwortet nicht. Starte die App erneut und versuche es noch einmal.';
+    case 'unattended_unavailable':
+      return 'Der sichere OnGROW-Zugriff ist auf dem Server noch nicht aktiviert.';
+    default:
+      return 'Die Freigabe konnte nicht abgeschlossen werden. Es wurden keine Zugangsdaten angezeigt.';
+  }
+}
+
+class _ConfirmUnattendedDialog extends StatelessWidget {
+  const _ConfirmUnattendedDialog({required this.enable});
+
+  final bool enable;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = enable
+        ? 'Unbeaufsichtigten Zugriff freigeben?'
+        : 'Zugriff wirklich widerrufen?';
+    return AlertDialog(
+      title: Text(title),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              enable
+                  ? 'OnGROW darf bei Supportbedarf auf dieses Gerät zugreifen – auch wenn gerade niemand davor sitzt. Du kannst die Freigabe jederzeit widerrufen.'
+                  : 'OnGROW kann sich danach nicht mehr unbeaufsichtigt verbinden. Eine bereits laufende Support-Sitzung wird beendet.',
+              style: const TextStyle(color: ongrowMuted, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEDE6FB),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.shield_outlined,
+                    color: Color(0xFF6541C7),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      enable
+                          ? 'Das Passwort bleibt geheim und wird verschlüsselt übertragen.'
+                          : 'Der lokale Zugriff wird sofort gesperrt; die Serverbestätigung folgt.',
+                      style: const TextStyle(
+                        color: Color(0xFF6541C7),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          autofocus: true,
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Abbrechen'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          style: FilledButton.styleFrom(
+            backgroundColor: enable ? ongrowViolet : const Color(0xFFA12B3A),
+            minimumSize: const Size(48, 44),
+          ),
+          child: Text(enable ? 'Sicher freigeben' : 'Zugriff widerrufen'),
+        ),
+      ],
     );
   }
 }

@@ -36,6 +36,8 @@ void main() {
               requestMicrophone: noAction,
               openNetworkSettings: noAction,
               refresh: () async => snapshot,
+              enableUnattended: noAction,
+              revokeUnattended: noAction,
             ),
           ),
         ),

@@ -32,6 +32,8 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   var _automaticIdAssignmentRunning = false;
   var _automaticIdAssignmentFinishedForSession = false;
   var _canAcceptIncomingConnections = !isMacOS;
+  var _unattendedStatusRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
+  var _unattendedActionRunning = false;
   var _snapshot = const OnGrowSupportSnapshot(
     supportId: '',
     ready: false,
@@ -109,6 +111,25 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
           await osxCanRecordAudio() == PermissionAuthorizeType.authorized;
     }
 
+    var unattendedStatus = _snapshot.unattendedStatus;
+    var unattendedError = _snapshot.unattendedError;
+    final now = DateTime.now();
+    if (_controlPlaneConfigured &&
+        !_unattendedActionRunning &&
+        !now.isBefore(_unattendedStatusRefreshAt)) {
+      _unattendedStatusRefreshAt = now.add(const Duration(seconds: 3));
+      try {
+        final result = _decodeUnattendedResult(
+          await bind.mainGetOngrowUnattendedStatus(),
+        );
+        unattendedStatus = result.status;
+        unattendedError = result.error;
+      } catch (_) {
+        unattendedStatus = OnGrowUnattendedStatus.error;
+        unattendedError = 'status_unavailable';
+      }
+    }
+
     return OnGrowSupportSnapshot(
       supportId: gFFI.serverModel.serverId.text,
       ready: ready,
@@ -118,7 +139,107 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       canRecordAudio: !isMacOS || canRecordAudio,
       canAcceptIncomingConnections: _canAcceptIncomingConnections,
       version: _snapshot.version,
+      unattendedStatus: unattendedStatus,
+      unattendedError: unattendedError,
     );
+  }
+
+  OnGrowUnattendedResult _decodeUnattendedResult(String raw) {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('invalid unattended response');
+    }
+    return OnGrowUnattendedResult.fromJson(decoded);
+  }
+
+  Future<void> _enableUnattended() async {
+    if (_unattendedActionRunning) {
+      return;
+    }
+    _unattendedActionRunning = true;
+    if (mounted) {
+      setState(
+        () => _snapshot = _snapshot.copyWith(
+          unattendedStatus: OnGrowUnattendedStatus.preparing,
+          unattendedError: '',
+        ),
+      );
+    }
+    try {
+      final result = _decodeUnattendedResult(
+        await bind.mainEnableOngrowUnattended(
+          screenRecording: _snapshot.canRecordScreen,
+          accessibility: _snapshot.isProcessTrusted,
+          inputMonitoring: _snapshot.canMonitorInput,
+          audioRecording: _snapshot.canRecordAudio,
+          network: _snapshot.canAcceptIncomingConnections,
+        ),
+      );
+      if (mounted) {
+        setState(
+          () => _snapshot = _snapshot.copyWith(
+            unattendedStatus: result.status,
+            unattendedError: result.error,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _snapshot = _snapshot.copyWith(
+            unattendedStatus: OnGrowUnattendedStatus.error,
+            unattendedError: 'unattended_failed',
+          ),
+        );
+      }
+    } finally {
+      _unattendedActionRunning = false;
+      _unattendedStatusRefreshAt = DateTime.now().add(
+        const Duration(seconds: 2),
+      );
+    }
+  }
+
+  Future<void> _revokeUnattended() async {
+    if (_unattendedActionRunning) {
+      return;
+    }
+    _unattendedActionRunning = true;
+    if (mounted) {
+      setState(
+        () => _snapshot = _snapshot.copyWith(
+          unattendedStatus: OnGrowUnattendedStatus.revoking,
+          unattendedError: '',
+        ),
+      );
+    }
+    try {
+      final result = _decodeUnattendedResult(
+        await bind.mainRevokeOngrowUnattended(),
+      );
+      if (mounted) {
+        setState(
+          () => _snapshot = _snapshot.copyWith(
+            unattendedStatus: result.status,
+            unattendedError: result.error,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _snapshot = _snapshot.copyWith(
+            unattendedStatus: OnGrowUnattendedStatus.revoking,
+            unattendedError: 'control_plane_unavailable',
+          ),
+        );
+      }
+    } finally {
+      _unattendedActionRunning = false;
+      _unattendedStatusRefreshAt = DateTime.now().add(
+        const Duration(seconds: 3),
+      );
+    }
   }
 
   Future<OnGrowSupportSnapshot> _refresh() async {
@@ -333,7 +454,34 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
         requestMicrophone: _requestMicrophone,
         openNetworkSettings: _openNetworkSettings,
         refresh: _refresh,
+        enableUnattended: _enableUnattended,
+        revokeUnattended: _revokeUnattended,
       ),
     );
   }
+}
+
+class OnGrowUnattendedResult {
+  const OnGrowUnattendedResult({
+    required this.status,
+    required this.error,
+  });
+
+  factory OnGrowUnattendedResult.fromJson(Map<String, dynamic> json) {
+    final rawStatus = json['status'] as String? ?? 'error';
+    return OnGrowUnattendedResult(
+      status: switch (rawStatus) {
+        'not_granted' => OnGrowUnattendedStatus.notGranted,
+        'preparing' => OnGrowUnattendedStatus.preparing,
+        'enabled' => OnGrowUnattendedStatus.enabled,
+        'action_required' => OnGrowUnattendedStatus.actionRequired,
+        'revoking' => OnGrowUnattendedStatus.revoking,
+        _ => OnGrowUnattendedStatus.error,
+      },
+      error: json['error'] as String? ?? '',
+    );
+  }
+
+  final OnGrowUnattendedStatus status;
+  final String error;
 }

@@ -973,6 +973,30 @@ pub fn main_sync_ongrow_control(
     )
 }
 
+pub fn main_get_ongrow_unattended_status() -> String {
+    crate::ongrow_control::unattended_status()
+}
+
+pub fn main_enable_ongrow_unattended(
+    screen_recording: bool,
+    accessibility: bool,
+    input_monitoring: bool,
+    audio_recording: bool,
+    network: bool,
+) -> String {
+    crate::ongrow_control::enable_unattended(crate::ongrow_control::Permissions {
+        screen_recording,
+        accessibility,
+        input_monitoring,
+        audio_recording,
+        network,
+    })
+}
+
+pub fn main_revoke_ongrow_unattended() -> String {
+    crate::ongrow_control::revoke_unattended()
+}
+
 pub fn main_get_async_status() -> String {
     get_async_job_status()
 }

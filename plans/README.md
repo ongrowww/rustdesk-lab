@@ -15,7 +15,7 @@ aktualisiert der ausführende Agent die betreffende Statuszeile.
 | 003 | Signiertes Device-Enrollment und Heartbeat aufbauen | P1 | L | 002 | DONE (`5dfcd4a`) |
 | 004 | Authentifiziertes Admin-Inventar und Kundenzuordnung umsetzen | P1 | L | 003 | DONE (`9092319`) |
 | 005 | Vault-, RBAC- und Auditgrundlage bereitstellen | P1 | XL | 003, 004 | DONE (`749263f`, Restore-Drills 12.08.2026) |
-| 006 | Unbeaufsichtigten Zugriff ausdrücklich freigeben und widerrufen | P1 | XL | 002, 003, 005 | TODO |
+| 006 | Unbeaufsichtigten Zugriff ausdrücklich freigeben und widerrufen | P1 | XL | 002, 003, 005 | IN PROGRESS (lokale Implementierung; CI/E2E ausstehend) |
 | 007 | Autorisierte Technikerverbindung ohne Passwortanzeige umsetzen | P1 | XL | 004, 005, 006 | TODO |
 | 008 | Produktionsfreigabe, Wiederherstellung und Compliance absichern | P1 | XL | 002–007 | TODO |
 

@@ -1,9 +1,29 @@
 # Plan 006: Unbeaufsichtigten Zugriff ausdrücklich freigeben und widerrufen
 
-Status: TODO
+Status: IN PROGRESS (lokal implementiert; Rust-CI und Ende-zu-Ende-Test ausstehend)
 Priorität: Hoch
 Abhängigkeiten: Plan 002, Plan 003 und Plan 005
 Geplant am: 2026-07-30
+
+## Implementierungsstand vom 13.08.2026
+
+- Der Figma-Entwurf enthält die sechs vorgesehenen Zustände sowie getrennte
+  Bestätigungsdialoge für Freigabe und Widerruf.
+- Client-Core, FFI und Flutter-Oberfläche sind lokal implementiert.
+- Der Client verwendet Service-ACKs, bewahrt vorige Optionswerte auf,
+  blockiert fremde Passwörter und prüft vor dem Löschen den nicht geheimen
+  Fingerprint des selbst gesetzten Passwortspeichers.
+- Aktivierung und Widerruf verwenden die signierten Plan-005-Endpunkte. Ein
+  Offline-Widerruf sperrt lokal zuerst und wiederholt die Serverbestätigung
+  mit begrenztem Backoff.
+- Alle sieben Flutter-Previewtests und der vorhandene App-Widgettest sind
+  lokal grün; die gezielte Flutter-Analyse meldet keine Probleme. Desktop,
+  kompakte Ansicht, Freigabekarte und Einwilligungsdialog wurden zusätzlich
+  im laufenden Web-Preview visuell geprüft.
+- Die bestehenden Go-Tests des Support Control sind mit der Client-
+  Implementierung weiterhin vollständig grün.
+- Offen sind Rust-Formatierung und -Kompilierung, Bridge-Generierung,
+  macOS-CI-Build und der isolierte Ende-zu-Ende-Test mit Test-Keyrings.
 
 ## Ziel
 

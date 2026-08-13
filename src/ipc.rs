@@ -1601,6 +1601,18 @@ pub fn is_permanent_password_set() -> bool {
     false
 }
 
+pub async fn is_permanent_password_set_async() -> bool {
+    match get_config_async("permanent-password-set", 1_000).await {
+        Ok(Some(value)) if value.trim() == "Y" => {
+            if let Err(err) = sync_permanent_password_storage_from_daemon_async().await {
+                log::warn!("Failed to sync permanent password storage from daemon: {err}");
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn is_permanent_password_preset() -> bool {
     if let Ok(Some(v)) = get_config("permanent-password-is-preset") {
         let v = v.trim();
@@ -1631,7 +1643,7 @@ pub async fn set_permanent_password_with_ack(v: String) -> ResultType<bool> {
     set_permanent_password_with_ack_async(v).await
 }
 
-async fn set_permanent_password_with_ack_async(v: String) -> ResultType<bool> {
+pub async fn set_permanent_password_with_ack_async(v: String) -> ResultType<bool> {
     // The daemon ACK/NACK is expected quickly since it applies the config in-process.
     let ms_timeout = 1_000;
     let mut c = connect(ms_timeout, "").await?;
@@ -1784,6 +1796,13 @@ pub async fn get_options_async() -> HashMap<String, String> {
     get_options_(1000).await.unwrap_or(Config::get_options())
 }
 
+/// Read the daemon-owned options without silently falling back to the local
+/// config. OnGROW's unattended-access transaction uses this to distinguish a
+/// running, writable service from stale local state.
+pub async fn get_options_with_ack() -> ResultType<HashMap<String, String>> {
+    get_options_(1000).await
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn get_options() -> HashMap<String, String> {
     get_options_async().await
@@ -1817,6 +1836,24 @@ pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
     }
     Config::set_options(value);
     Ok(())
+}
+
+/// Replace daemon-owned options and require its explicit acknowledgement.
+///
+/// The regular settings path intentionally tolerates a missing daemon and
+/// writes the local config. That behavior is unsuitable for a security
+/// transaction: an unattended-access grant must not be reported as applied
+/// until the installed service confirmed the write.
+pub async fn set_options_with_ack(value: HashMap<String, String>) -> ResultType<bool> {
+    let _nat = CheckTestNatType::new();
+    let ms_timeout = 1_000;
+    let mut c = connect(ms_timeout, "").await?;
+    c.send(&Data::Options(Some(value.clone()))).await?;
+    if let Some(Data::Options(None)) = c.next_timeout(ms_timeout).await? {
+        Config::set_options(value);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[inline]
