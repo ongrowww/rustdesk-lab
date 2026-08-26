@@ -20,6 +20,8 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  ONGROW_RENDEZVOUS_HOST: "${{ vars.ONGROW_RENDEZVOUS_HOST }}"
+  ONGROW_HBBS_PUBLIC_KEY: "${{ vars.ONGROW_HBBS_PUBLIC_KEY }}"
   ONGROW_CONTROL_PLANE_URL: "${{ vars.ONGROW_CONTROL_PLANE_URL }}"
 
 jobs:
@@ -33,6 +35,23 @@ jobs:
           ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
+
+      - name: Validate and apply OnGROW product profile
+        shell: bash
+        run: |
+          test -n "$ONGROW_RENDEZVOUS_HOST"
+          test -n "$ONGROW_HBBS_PUBLIC_KEY"
+          test -n "$ONGROW_CONTROL_PLANE_URL"
+          python3 scripts/test_ongrow_product_profile.py
+          git -C libs/hbb_common apply --unidiff-zero \
+            "$GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
+          python3 scripts/apply_ongrow_product_profile.py \
+            --role customer-desk \
+            --app-name "OnGROW Support Desk" \
+            --rendezvous-host "$ONGROW_RENDEZVOUS_HOST" \
+            --hbbs-public-key "$ONGROW_HBBS_PUBLIC_KEY" \
+            --control-plane-url "$ONGROW_CONTROL_PLANE_URL"
+          test "$(git -C libs/hbb_common diff --name-only)" = "src/config.rs"
 
       - name: Verify source revision
         shell: bash
@@ -151,21 +170,49 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Validate and apply OnGROW product profile
+        shell: bash
+        run: |
+          test -n "$ONGROW_RENDEZVOUS_HOST"
+          test -n "$ONGROW_HBBS_PUBLIC_KEY"
+          test -n "$ONGROW_CONTROL_PLANE_URL"
+          python3 scripts/test_ongrow_product_profile.py
+          git -C libs/hbb_common apply --unidiff-zero \
+            "$GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
+          python3 scripts/apply_ongrow_product_profile.py \
+            --role customer-desk \
+            --app-name "OnGROW Support Desk" \
+            --rendezvous-host "$ONGROW_RENDEZVOUS_HOST" \
+            --hbbs-public-key "$ONGROW_HBBS_PUBLIC_KEY" \
+            --control-plane-url "$ONGROW_CONTROL_PLANE_URL"
+          test "$(git -C libs/hbb_common diff --name-only)" = "src/config.rs"
+
+      - name: Record build provenance
+        shell: bash
+        run: |
+          python3 - <<'PY' > ongrow-build-provenance.txt
+          import base64
+          import hashlib
+          import os
+          import subprocess
+
+          def git(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          key = base64.b64decode(os.environ["ONGROW_HBBS_PUBLIC_KEY"], validate=True)
+          print(f"source={git('rev-parse', 'HEAD')}")
+          print(f"submodules={git('submodule', 'status', '--recursive').replace(chr(10), ';')}")
+          patch = open(".github/patches/ongrow-support-desk-hbb-common.patch", "rb").read()
+          print(f"profile_patch_sha256={hashlib.sha256(patch).hexdigest()}")
+          print(f"hbbs_key_sha256={hashlib.sha256(key).hexdigest()}")
+          PY
+
       - name: Verify source revision and runner architecture
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(uname -m)" = "arm64"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
-
-      - name: Apply OnGROW branding patch
-        shell: bash
-        run: |
-          git -C libs/hbb_common apply \
-            "$GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
-          grep -Fq \
-            'RwLock::new("OnGROW Support Desk".to_owned())' \
-            libs/hbb_common/src/config.rs
 
       - name: Install build runtime
         run: |
@@ -302,6 +349,29 @@ jobs:
           file "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
             | grep -q "arm64"
 
+      - name: Verify embedded OnGROW trust profile
+        shell: bash
+        run: |
+          RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
+          RUSTDESK_EXECUTABLE="$RUSTDESK_APP_PATH/Contents/MacOS/OnGROW Support Desk"
+          python3 - "$RUSTDESK_EXECUTABLE" <<'PY'
+          import base64
+          import hashlib
+          import os
+          import pathlib
+          import sys
+
+          binary = pathlib.Path(sys.argv[1]).read_bytes()
+          host = os.environ["ONGROW_RENDEZVOUS_HOST"].encode()
+          encoded_key = os.environ["ONGROW_HBBS_PUBLIC_KEY"].encode()
+          if host not in binary:
+              raise SystemExit("OnGROW rendezvous host is missing from artifact")
+          if encoded_key not in binary:
+              raise SystemExit("OnGROW hbbs trust anchor is missing from artifact")
+          key = base64.b64decode(encoded_key, validate=True)
+          print(f"verified hbbs key sha256={hashlib.sha256(key).hexdigest()}")
+          PY
+
       - name: Ad-hoc sign and verify app bundle
         shell: bash
         run: |
@@ -379,3 +449,4 @@ jobs:
           path: |
             ongrow-support-desk-1.4.9-macos-arm64-adhoc.dmg
             ongrow-support-desk-1.4.9-macos-arm64-adhoc.dmg.sha256
+            ongrow-build-provenance.txt
