@@ -1,12 +1,118 @@
 diff --git a/src/config.rs b/src/config.rs
-index 2af82bd..9825490 100644
+index 707bbe0..6ea77ec 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -70,6 +70,6 @@ lazy_static::lazy_static! {
-     pub static ref PROD_RENDEZVOUS_SERVER: RwLock<String> = RwLock::new("".to_owned());
-     pub static ref EXE_RENDEZVOUS_SERVER: RwLock<String> = Default::default();
--    pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());
-+    pub static ref APP_NAME: RwLock<String> = RwLock::new("OnGROW Support Desk".to_owned());
-     static ref KEY_PAIR: Mutex<Option<KeyPair>> = Default::default();
-     static ref USER_DEFAULT_CONFIG: RwLock<(UserDefaultConfig, Instant)> = RwLock::new((UserDefaultConfig::load(), Instant::now()));
-     pub static ref NEW_STORED_PEER_CONFIG: Mutex<HashSet<String>> = Default::default();
+@@ -127,0 +128,26 @@ pub const WS_RELAY_PORT: i32 = 21119;
++fn select_rendezvous_servers(
++    executable: &str,
++    explicit_user: &str,
++    product: &str,
++    serial_obsolete: bool,
++    configured: &str,
++    fallback: &[&str],
++) -> Vec<String> {
++    for candidate in [executable, explicit_user, product] {
++        if !candidate.is_empty() {
++            return vec![candidate.to_owned()];
++        }
++    }
++    if serial_obsolete {
++        let configured: Vec<String> = configured
++            .split(',')
++            .filter(|host| host.contains('.'))
++            .map(str::to_owned)
++            .collect();
++        if !configured.is_empty() {
++            return configured;
++        }
++    }
++    fallback.iter().map(|host| (*host).to_owned()).collect()
++}
++
+@@ -937,12 +963,3 @@ impl Config {
+-        let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
+-        if !s.is_empty() {
+-            return vec![s];
+-        }
+-        let s = Self::get_option("custom-rendezvous-server");
+-        if !s.is_empty() {
+-            return vec![s];
+-        }
+-        let s = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
+-        if !s.is_empty() {
+-            return vec![s];
+-        }
++        let executable = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
++        let explicit_user = Self::get_option("custom-rendezvous-server");
++        let product = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
+@@ -950,11 +967,9 @@ impl Config {
+-        if serial_obsolute {
+-            let ss: Vec<String> = Self::get_option("rendezvous-servers")
+-                .split(',')
+-                .filter(|x| x.contains('.'))
+-                .map(|x| x.to_owned())
+-                .collect();
+-            if !ss.is_empty() {
+-                return ss;
+-            }
+-        }
+-        return RENDEZVOUS_SERVERS.iter().map(|x| x.to_string()).collect();
++        let configured = Self::get_option("rendezvous-servers");
++        select_rendezvous_servers(
++            &executable,
++            &explicit_user,
++            &product,
++            serial_obsolute,
++            &configured,
++            RENDEZVOUS_SERVERS,
++        )
+@@ -3289,0 +3305,49 @@ mod tests {
++    #[test]
++    fn test_ongrow_rendezvous_precedence_and_fail_closed_fallback() {
++        let public_fallback = ["rs-ny.rustdesk.com"];
++        assert_eq!(
++            select_rendezvous_servers(
++                "exe.example.test",
++                "user.example.test",
++                "product.example.test",
++                true,
++                "configured.example.test",
++                &public_fallback,
++            ),
++            ["exe.example.test"]
++        );
++        assert_eq!(
++            select_rendezvous_servers(
++                "",
++                "user.example.test",
++                "product.example.test",
++                true,
++                "configured.example.test",
++                &public_fallback,
++            ),
++            ["user.example.test"]
++        );
++        assert_eq!(
++            select_rendezvous_servers(
++                "",
++                "",
++                "product.example.test",
++                true,
++                "configured.example.test",
++                &public_fallback,
++            ),
++            ["product.example.test"]
++        );
++        assert_eq!(
++            select_rendezvous_servers(
++                "",
++                "",
++                "product.example.test",
++                false,
++                "",
++                &public_fallback,
++            ),
++            ["product.example.test"]
++        );
++    }
++
