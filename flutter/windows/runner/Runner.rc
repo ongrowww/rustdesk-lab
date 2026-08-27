@@ -94,7 +94,7 @@ BEGIN
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "ongrow_support_desk" "\0"
             VALUE "LegalCopyright", "Copyright © 2026 OnGROW GmbH and RustDesk contributors. Licensed under AGPL-3.0." "\0"
-            VALUE "OriginalFilename", "ongrow_support_desk.exe" "\0"
+            VALUE "OriginalFilename", "OnGROW Support Desk.exe" "\0"
             VALUE "ProductName", "OnGROW Support Desk" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

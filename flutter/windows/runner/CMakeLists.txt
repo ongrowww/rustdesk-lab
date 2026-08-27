@@ -17,6 +17,10 @@ add_executable(${BINARY_NAME} WIN32
   "runner.exe.manifest"
 )
 
+# Keep a CMake-safe internal target name while matching the filename expected
+# by the Rust installer, service manager, and updater for this product profile.
+set_target_properties(${BINARY_NAME} PROPERTIES OUTPUT_NAME "OnGROW Support Desk")
+
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
