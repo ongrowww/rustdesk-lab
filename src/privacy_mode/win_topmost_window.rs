@@ -30,8 +30,6 @@ use winapi::{
 pub(super) const PRIVACY_MODE_IMPL: &str = "privacy_mode_impl_mag";
 
 pub const ORIGIN_PROCESS_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
-pub const WIN_TOPMOST_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_rustdesk.exe";
-pub const INJECTED_PROCESS_EXE: &'static str = WIN_TOPMOST_INJECTED_PROCESS_EXE;
 pub(super) const PRIVACY_WINDOW_CLASS: &'static str = "RustDeskPrivacyWindowClass";
 pub(super) const PRIVACY_WINDOW_NAME: &'static str = "RustDeskPrivacyWindow";
 const PRIVACY_WINDOW_WAIT_MILLIS: u128 = 1_000;
@@ -39,6 +37,36 @@ const PRIVACY_WINDOW_WAIT_EXTRA_MONITOR_MILLIS: u128 = 500;
 const PRIVACY_WINDOW_POLL_INTERVAL_MILLIS: u64 = 100;
 const WM_RUSTDESK_SHOW_WINDOWS: u32 = WM_APP + 3;
 const WM_RUSTDESK_HIDE_WINDOWS: u32 = WM_APP + 4;
+
+pub fn broker_process_exe_for_app_name(app_name: &str) -> String {
+    if app_name == "RustDesk" {
+        return "RuntimeBroker_rustdesk.exe".to_owned();
+    }
+
+    let mut product_name = String::new();
+    let mut previous_was_separator = false;
+    for character in app_name.chars() {
+        if character.is_ascii_alphanumeric() {
+            product_name.push(character.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !product_name.is_empty() && !previous_was_separator {
+            product_name.push('_');
+            previous_was_separator = true;
+        }
+    }
+    while product_name.ends_with('_') {
+        product_name.pop();
+    }
+    if product_name.is_empty() {
+        product_name.push_str("custom");
+    }
+
+    format!("RuntimeBroker_{product_name}.exe")
+}
+
+pub fn broker_process_exe() -> String {
+    broker_process_exe_for_app_name(&crate::get_app_name())
+}
 
 struct WindowHandlers {
     hthread: u64,
@@ -221,7 +249,7 @@ impl PrivacyModeImpl {
 
         // let cmdline = cur_dir.join("MiniBroker.exe").to_string_lossy().to_string();
         let cmdline = cur_dir
-            .join(INJECTED_PROCESS_EXE)
+            .join(broker_process_exe())
             .to_string_lossy()
             .to_string();
 

@@ -3,7 +3,7 @@ use crate::{
     common::PORTABLE_APPNAME_RUNTIME_ENV_KEY,
     custom_server::*,
     ipc,
-    privacy_mode::win_topmost_window::{self, WIN_TOPMOST_INJECTED_PROCESS_EXE},
+    privacy_mode::win_topmost_window,
 };
 use hbb_common::{
     allow_err,
@@ -1295,9 +1295,13 @@ fn service_control_cmd(action: &str, app_name: &str) -> String {
 }
 
 fn taskkill_app_cmd(app_name: &str, filter: &str) -> String {
+    taskkill_process_cmd(&format!("{app_name}.exe"), filter)
+}
+
+fn taskkill_process_cmd(process_exe: &str, filter: &str) -> String {
     format!(
         "taskkill /F /IM {}{filter}",
-        quote_cmd_arg(&format!("{app_name}.exe"))
+        quote_cmd_arg(process_exe)
     )
 }
 
@@ -1399,20 +1403,21 @@ fn get_default_install_path() -> String {
 }
 
 pub fn check_update_broker_process() -> ResultType<()> {
-    let process_exe = win_topmost_window::INJECTED_PROCESS_EXE;
+    let process_exe = win_topmost_window::broker_process_exe();
     let origin_process_exe = win_topmost_window::ORIGIN_PROCESS_EXE;
 
     let exe_file = std::env::current_exe()?;
     let Some(cur_dir) = exe_file.parent() else {
         bail!("Cannot get parent of current exe file");
     };
-    let cur_exe = cur_dir.join(process_exe);
+    let cur_exe = cur_dir.join(&process_exe);
+    let kill_broker = taskkill_process_cmd(&process_exe, "");
 
     // Force update broker exe if failed to check modified time.
     let cmds = format!(
         "
         chcp 65001
-        taskkill /F /IM {process_exe}
+        {kill_broker}
         copy /Y \"{origin_process_exe}\" \"{cur_exe}\"
     ",
         cur_exe = cur_exe.to_string_lossy(),
@@ -1472,13 +1477,13 @@ pub fn copy_raw_cmd(src_raw: &str, _raw: &str, _path: &str) -> ResultType<String
 
 pub fn copy_exe_cmd(src_exe: &str, exe: &str, path: &str) -> ResultType<String> {
     let main_exe = copy_raw_cmd(src_exe, exe, path)?;
+    let broker_exe = win_topmost_window::broker_process_exe();
     Ok(format!(
         "
         {main_exe}
         copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
         ",
         ORIGIN_PROCESS_EXE = win_topmost_window::ORIGIN_PROCESS_EXE,
-        broker_exe = win_topmost_window::INJECTED_PROCESS_EXE,
     ))
 }
 
@@ -1803,18 +1808,18 @@ fn get_before_uninstall(kill_self: bool) -> String {
     let stop_service = service_control_cmd("stop", &app_name);
     let delete_service = service_control_cmd("delete", &app_name);
     let kill_app = taskkill_app_cmd(&app_name, &filter);
+    let kill_broker = taskkill_process_cmd(&win_topmost_window::broker_process_exe(), "");
     format!(
         "
     chcp 65001
     {stop_service}
     {delete_service}
-    taskkill /F /IM {broker_exe}
+    {kill_broker}
     {kill_app}
     reg delete \"HKEY_CLASSES_ROOT\\.{ext}\" /f
     reg delete \"HKEY_CLASSES_ROOT\\{url_scheme}\" /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
-        broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
     )
 }
 
@@ -3203,6 +3208,7 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     let stop_service = service_control_cmd("stop", &app_name);
     let delete_service = service_control_cmd("delete", &app_name);
     let kill_app = taskkill_app_cmd(&app_name, &filter);
+    let kill_broker = taskkill_process_cmd(&win_topmost_window::broker_process_exe(), "");
     Config::set_option("stop-service".into(), "Y".into());
     let cmds = format!(
         "
@@ -3210,11 +3216,10 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     {stop_service}
     {delete_service}
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
-    taskkill /F /IM {broker_exe}
+    {kill_broker}
     {kill_app}
     ",
         app_name = app_name,
-        broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
     );
     if let Err(err) = run_cmds(cmds, false, "uninstall") {
         Config::set_option("stop-service".into(), "".into());
@@ -3826,12 +3831,10 @@ pub fn try_remove_temp_update_files() {
 
 #[inline]
 pub fn try_kill_broker() {
+    let kill_broker = taskkill_process_cmd(&win_topmost_window::broker_process_exe(), "");
     allow_err!(std::process::Command::new("cmd")
         .arg("/c")
-        .arg(&format!(
-            "taskkill /F /IM {}",
-            WIN_TOPMOST_INJECTED_PROCESS_EXE
-        ))
+        .arg(kill_broker)
         .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
         .spawn());
 }
@@ -4596,6 +4599,23 @@ mod tests {
             taskkill_app_cmd("RustDesk", ""),
             "taskkill /F /IM \"RustDesk.exe\""
         );
+    }
+
+    #[test]
+    fn broker_process_identity_is_isolated_per_product() {
+        assert_eq!(
+            win_topmost_window::broker_process_exe_for_app_name("RustDesk"),
+            "RuntimeBroker_rustdesk.exe"
+        );
+        let ongrow_broker =
+            win_topmost_window::broker_process_exe_for_app_name("OnGROW Support Desk");
+        assert_eq!(ongrow_broker, "RuntimeBroker_ongrow_support_desk.exe");
+        let ongrow_kill = taskkill_process_cmd(&ongrow_broker, "");
+        assert_eq!(
+            ongrow_kill,
+            "taskkill /F /IM \"RuntimeBroker_ongrow_support_desk.exe\""
+        );
+        assert!(!ongrow_kill.contains("RuntimeBroker_rustdesk.exe"));
     }
 
     #[test]
