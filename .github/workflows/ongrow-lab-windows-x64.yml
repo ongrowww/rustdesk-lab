@@ -1,0 +1,364 @@
+name: OnGROW Support Desk - Windows x64 Lab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ongrow-support-desk-windows-x64-lab
+  cancel-in-progress: false
+
+env:
+  VERSION: "1.4.9"
+  BRIDGE_RUST_VERSION: "1.75"
+  WINDOWS_RUST_VERSION: "1.75"
+  BRIDGE_FLUTTER_VERSION: "3.22.3"
+  FLUTTER_VERSION: "3.24.5"
+  CARGO_EXPAND_VERSION: "1.0.95"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  CUSTOM_ENGINE_SHA256: "ec8cabf36ee4ff24c8d98de25b00e70781eb03876265aee84d0fe554a110036e"
+  ARTIFACT_NAME: "ongrow-support-desk-1.4.9-windows-x64-unsigned-lab"
+  ONGROW_RENDEZVOUS_HOST: "${{ vars.ONGROW_RENDEZVOUS_HOST }}"
+  ONGROW_HBBS_PUBLIC_KEY: "${{ vars.ONGROW_HBBS_PUBLIC_KEY }}"
+  ONGROW_CONTROL_PLANE_URL: "${{ vars.ONGROW_CONTROL_PLANE_URL }}"
+
+jobs:
+  generate-bridge:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Validate and apply OnGROW product profile
+        shell: bash
+        run: |
+          test -n "$ONGROW_RENDEZVOUS_HOST"
+          test -n "$ONGROW_HBBS_PUBLIC_KEY"
+          test -n "$ONGROW_CONTROL_PLANE_URL"
+          python3 scripts/test_ongrow_product_profile.py
+          python3 scripts/test_ongrow_windows_product.py
+          git -C libs/hbb_common apply --unidiff-zero \
+            "$GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
+          python3 scripts/apply_ongrow_product_profile.py \
+            --role customer-desk \
+            --app-name "OnGROW Support Desk" \
+            --rendezvous-host "$ONGROW_RENDEZVOUS_HOST" \
+            --hbbs-public-key "$ONGROW_HBBS_PUBLIC_KEY" \
+            --control-plane-url "$ONGROW_CONTROL_PLANE_URL"
+          test "$(git -C libs/hbb_common diff --name-only)" = "src/config.rs"
+
+      - name: Verify source revision
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            ca-certificates clang cmake curl gcc git g++ libclang-dev \
+            libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.BRIDGE_RUST_VERSION }}
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: bridge-windows-x64-ubuntu-22.04
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.BRIDGE_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Test customer UI and install bridge dependencies
+        shell: bash
+        run: |
+          cargo install cargo-expand --version "$CARGO_EXPAND_VERSION" --locked
+          cargo install flutter_rust_bridge_codegen \
+            --version "$FLUTTER_RUST_BRIDGE_VERSION" --features "uuid" --locked
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' \
+            flutter/pubspec.yaml
+          pushd flutter
+          flutter pub get
+          flutter test --no-pub test/ongrow_device_attestation_test.dart
+          flutter test --no-pub test/ongrow_device_enrollment_test.dart
+          flutter test --no-pub test/ongrow_support_view_test.dart
+          flutter analyze --no-pub \
+            lib/common/ongrow_device_attestation.dart \
+            lib/common/ongrow_device_enrollment.dart \
+            packages/ongrow_support_ui/lib/ongrow_support_view.dart \
+            test/ongrow_device_attestation_test.dart \
+            test/ongrow_device_enrollment_test.dart \
+            test/ongrow_support_view_test.dart
+          popd
+
+      - name: Generate Flutter Rust Bridge files
+        shell: bash
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h \
+            ./flutter/ios/Runner/bridge_generated.h
+
+      - name: Verify generated bridge files
+        shell: bash
+        run: |
+          test -s ./src/bridge_generated.rs
+          test -s ./src/bridge_generated.io.rs
+          test -s ./flutter/lib/generated_bridge.dart
+          test -s ./flutter/lib/generated_bridge.freezed.dart
+
+      - name: Upload bridge artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ongrow-windows-bridge-1.4.9
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            ./src/bridge_generated.rs
+            ./src/bridge_generated.io.rs
+            ./flutter/lib/generated_bridge.dart
+            ./flutter/lib/generated_bridge.freezed.dart
+
+  build-windows-x64:
+    needs: generate-bridge
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Validate and apply OnGROW product profile
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ONGROW_RENDEZVOUS_HOST)) { throw "ONGROW_RENDEZVOUS_HOST is missing" }
+          if ([string]::IsNullOrWhiteSpace($env:ONGROW_HBBS_PUBLIC_KEY)) { throw "ONGROW_HBBS_PUBLIC_KEY is missing" }
+          if ([string]::IsNullOrWhiteSpace($env:ONGROW_CONTROL_PLANE_URL)) { throw "ONGROW_CONTROL_PLANE_URL is missing" }
+          python scripts/test_ongrow_product_profile.py
+          python scripts/test_ongrow_windows_product.py
+          git -C libs/hbb_common apply --unidiff-zero "$env:GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
+          python scripts/apply_ongrow_product_profile.py `
+            --role customer-desk `
+            --app-name "OnGROW Support Desk" `
+            --rendezvous-host "$env:ONGROW_RENDEZVOUS_HOST" `
+            --hbbs-public-key "$env:ONGROW_HBBS_PUBLIC_KEY" `
+            --control-plane-url "$env:ONGROW_CONTROL_PLANE_URL"
+          if ((git -C libs/hbb_common diff --name-only) -ne "src/config.rs") { throw "Unexpected product profile diff" }
+
+      - name: Record build provenance
+        shell: pwsh
+        run: |
+          @'
+          import base64
+          import hashlib
+          import os
+          import subprocess
+
+          def git(*args: str) -> str:
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          key = base64.b64decode(os.environ["ONGROW_HBBS_PUBLIC_KEY"], validate=True)
+          with open("ongrow-build-provenance.txt", "w", encoding="utf-8") as output:
+              output.write(f"source={git('rev-parse', 'HEAD')}\n")
+              output.write(f"submodules={git('submodule', 'status', '--recursive').replace(chr(10), ';')}\n")
+              patch = open(".github/patches/ongrow-support-desk-hbb-common.patch", "rb").read()
+              output.write(f"profile_patch_sha256={hashlib.sha256(patch).hexdigest()}\n")
+              output.write(f"hbbs_key_sha256={hashlib.sha256(key).hexdigest()}\n")
+          '@ | python
+
+      - name: Verify source revision and runner architecture
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw "Source revision mismatch" }
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") { throw "Expected AMD64 runner" }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches.Groups[1].Value
+          if ($version -ne $env:VERSION) { throw "Version mismatch" }
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225 # v2.12.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Install pinned custom Flutter engine
+        shell: pwsh
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          $actual = (Get-FileHash windows-x64-release.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:CUSTOM_ENGINE_SHA256) { throw "Custom Flutter engine checksum mismatch" }
+          Expand-Archive windows-x64-release.zip -DestinationPath windows-x64-release
+          Copy-Item -Force -Recurse windows-x64-release/* "C:/hostedtoolcache/windows/flutter/stable-$env:FLUTTER_VERSION-x64/bin/cache/artifacts/engine/windows-x64-release/"
+
+      - name: Patch Flutter
+        shell: bash
+        run: |
+          flutter_root="$(dirname "$(dirname "$(which flutter)")")"
+          cd "$flutter_root"
+          git apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.WINDOWS_RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: ongrow-windows-2022-x64
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ongrow-windows-bridge-1.4.9
+          path: ./
+
+      - name: Setup vcpkg with GitHub Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Run OnGROW Rust tests
+        shell: pwsh
+        run: |
+          cargo test --locked --lib --features flutter ongrow_control
+          cargo test --locked --lib --features flutter ui_interface::tests
+          cargo test --locked --lib --features flutter uninstall_candidates
+
+      - name: Build unsigned Windows x64 customer desk
+        shell: pwsh
+        run: |
+          python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+
+      - name: Verify and stage unsigned artifact
+        shell: pwsh
+        run: |
+          $release = Resolve-Path "flutter/build/windows/x64/runner/Release"
+          $exe = Join-Path $release "ongrow_support_desk.exe"
+          $core = Join-Path $release "librustdesk.dll"
+          if (-not (Test-Path $exe -PathType Leaf)) { throw "OnGROW executable is missing" }
+          if (-not (Test-Path $core -PathType Leaf)) { throw "Rust core DLL is missing" }
+          if (Test-Path (Join-Path $release "rustdesk.exe")) { throw "Upstream executable leaked into customer artifact" }
+
+          $exeBytes = [IO.File]::ReadAllBytes($exe)
+          $peOffset = [BitConverter]::ToInt32($exeBytes, 0x3c)
+          $machine = [BitConverter]::ToUInt16($exeBytes, $peOffset + 4)
+          if ($machine -ne 0x8664) { throw "Expected PE AMD64, got 0x$($machine.ToString('x4'))" }
+
+          $version = (Get-Item $exe).VersionInfo
+          if ($version.CompanyName -ne "OnGROW GmbH") { throw "Unexpected CompanyName" }
+          if ($version.ProductName -ne "OnGROW Support Desk") { throw "Unexpected ProductName" }
+          if ($version.InternalName -ne "ongrow_support_desk") { throw "Unexpected InternalName" }
+          if ($version.OriginalFilename -ne "ongrow_support_desk.exe") { throw "Unexpected OriginalFilename" }
+
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class OnGrowResources {
+              private delegate bool EnumResourceNameProc(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              private static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+              [DllImport("kernel32.dll")]
+              private static extern bool FreeLibrary(IntPtr module);
+              [DllImport("kernel32.dll", SetLastError = true)]
+              private static extern bool EnumResourceNames(IntPtr module, IntPtr type, EnumResourceNameProc callback, IntPtr param);
+              public static bool HasGroupIcon(string path) {
+                  IntPtr module = LoadLibraryEx(path, IntPtr.Zero, 0x2);
+                  if (module == IntPtr.Zero) return false;
+                  bool found = false;
+                  EnumResourceNames(module, new IntPtr(14), (m, t, n, p) => { found = true; return false; }, IntPtr.Zero);
+                  FreeLibrary(module);
+                  return found;
+              }
+          }
+          '@
+          if (-not [OnGrowResources]::HasGroupIcon($exe)) { throw "OnGROW icon resource is missing" }
+
+          $signature = Get-AuthenticodeSignature $exe
+          if ($signature.Status -ne "NotSigned") { throw "Lab executable must remain unsigned" }
+
+          $coreText = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($core))
+          if (-not $coreText.Contains("OnGROW Support Desk")) { throw "Customer product role is missing from Rust core" }
+          if (-not $coreText.Contains($env:ONGROW_RENDEZVOUS_HOST)) { throw "OnGROW rendezvous host is missing from Rust core" }
+          if (-not $coreText.Contains($env:ONGROW_HBBS_PUBLIC_KEY)) { throw "OnGROW trust anchor is missing from Rust core" }
+          if ($coreText.Contains("rs-ny.rustdesk.com")) { throw "Public RustDesk rendezvous host leaked into customer artifact" }
+
+          $keyBytes = [Convert]::FromBase64String($env:ONGROW_HBBS_PUBLIC_KEY)
+          $sha = [Security.Cryptography.SHA256]::Create()
+          try {
+            $fingerprint = ([BitConverter]::ToString($sha.ComputeHash($keyBytes))).Replace("-", "").ToLowerInvariant()
+          } finally {
+            $sha.Dispose()
+          }
+          if (-not (Select-String -Quiet -SimpleMatch "hbbs_key_sha256=$fingerprint" ongrow-build-provenance.txt)) { throw "Trust-anchor fingerprint mismatch" }
+
+          $artifact = Join-Path "dist" $env:ARTIFACT_NAME
+          New-Item -ItemType Directory -Force -Path $artifact | Out-Null
+          Copy-Item -Recurse -Force "$release/*" $artifact
+          Copy-Item ongrow-build-provenance.txt $artifact
+          $stagedExe = Join-Path $artifact "ongrow_support_desk.exe"
+          $digest = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  ongrow_support_desk.exe" | Set-Content -Encoding ascii (Join-Path $artifact "ongrow_support_desk.exe.sha256")
+          $recorded = ((Get-Content (Join-Path $artifact "ongrow_support_desk.exe.sha256")) -split " ")[0]
+          $actual = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($recorded -ne $actual) { throw "Staged executable checksum mismatch" }
+
+      - name: Upload unsigned Windows x64 lab artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ongrow-support-desk-1.4.9-windows-x64-unsigned-lab
+          retention-days: 7
+          if-no-files-found: error
+          path: dist/ongrow-support-desk-1.4.9-windows-x64-unsigned-lab/
