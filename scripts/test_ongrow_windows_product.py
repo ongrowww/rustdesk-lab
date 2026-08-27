@@ -82,6 +82,20 @@ class WindowsProductTests(unittest.TestCase):
             r"(?:sc (?:create|start|stop|delete)|taskkill /F /IM) \{app_name\}",
         )
 
+    def test_privacy_broker_identity_is_product_scoped(self) -> None:
+        windows = self.read("src/platform/windows.rs")
+        privacy = self.read("src/privacy_mode/win_topmost_window.rs")
+
+        self.assertIn("pub fn broker_process_exe_for_app_name", privacy)
+        self.assertIn('if app_name == "RustDesk" {', privacy)
+        self.assertIn('"RuntimeBroker_rustdesk.exe".to_owned()', privacy)
+        self.assertIn('format!("RuntimeBroker_{product_name}.exe")', privacy)
+        self.assertIn(
+            'broker_process_exe_for_app_name("OnGROW Support Desk")', windows
+        )
+        self.assertIn('"RuntimeBroker_ongrow_support_desk.exe"', windows)
+        self.assertNotIn("WIN_TOPMOST_INJECTED_PROCESS_EXE", windows)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

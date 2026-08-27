@@ -277,6 +277,7 @@ jobs:
           cargo test --locked --lib --features flutter ui_interface::tests
           cargo test --locked --lib --features flutter uninstall_candidates
           cargo test --locked --lib --features flutter service_commands
+          cargo test --locked --lib --features flutter broker_process_identity
 
       - name: Build unsigned Windows x64 customer desk
         shell: pwsh

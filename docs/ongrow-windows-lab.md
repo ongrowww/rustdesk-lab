@@ -38,6 +38,9 @@ VM-Test nicht.
 - [ ] In `services.msc` einen eigenen Service `OnGROW Support Desk` prüfen.
 - [ ] Sicherstellen, dass eine parallel installierte normale RustDesk-App,
       deren Service und deren Uninstall-Eintrag unverändert bleiben.
+- [ ] Sicherstellen, dass Installation, Privacy-Mode, Upgrade und Deinstallation
+      `RuntimeBroker_rustdesk.exe` weder beenden noch ersetzen. Der
+      OnGROW-Client muss `RuntimeBroker_ongrow_support_desk.exe` verwenden.
 
 ### 4. Firewall- und Netzwerkdialoge
 
