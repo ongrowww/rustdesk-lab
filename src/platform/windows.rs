@@ -1286,21 +1286,29 @@ fn get_subkey(name: &str, wow: bool) -> String {
     }
 }
 
+fn uninstall_subkey_candidates(app_name: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if app_name == "RustDesk" {
+        candidates.push(get_subkey(IS1, false));
+        candidates.push(get_subkey(IS1, true));
+    }
+    candidates.push(get_subkey(app_name, true));
+    candidates.push(get_subkey(app_name, false));
+    candidates
+}
+
 fn get_valid_subkey() -> String {
-    let subkey = get_subkey(IS1, false);
-    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
-        return subkey;
-    }
-    let subkey = get_subkey(IS1, true);
-    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
-        return subkey;
-    }
     let app_name = crate::get_app_name();
-    let subkey = get_subkey(&app_name, true);
-    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
-        return subkey;
+    let candidates = uninstall_subkey_candidates(&app_name);
+    for subkey in candidates.iter().take(candidates.len().saturating_sub(1)) {
+        if !get_reg_of(subkey, "InstallLocation").is_empty() {
+            return subkey.clone();
+        }
     }
-    return get_subkey(&app_name, false);
+    candidates
+        .into_iter()
+        .last()
+        .unwrap_or_else(|| get_subkey(&app_name, false))
 }
 
 // Return install options other than InstallLocation.
@@ -4517,6 +4525,29 @@ pub(super) fn get_pids_with_first_arg_by_wmic<S1: AsRef<str>, S2: AsRef<str>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rustdesk_uninstall_candidates_keep_legacy_inno_fallbacks() {
+        let candidates = uninstall_subkey_candidates("RustDesk");
+
+        assert_eq!(candidates.len(), 4);
+        assert_eq!(candidates[0], get_subkey(IS1, false));
+        assert_eq!(candidates[1], get_subkey(IS1, true));
+        assert_eq!(candidates[2], get_subkey("RustDesk", true));
+        assert_eq!(candidates[3], get_subkey("RustDesk", false));
+    }
+
+    #[test]
+    fn custom_product_uninstall_candidates_never_use_rustdesk_legacy_key() {
+        let app_name = "OnGROW Support Desk";
+        let candidates = uninstall_subkey_candidates(app_name);
+
+        assert_eq!(
+            candidates,
+            vec![get_subkey(app_name, true), get_subkey(app_name, false)]
+        );
+        assert!(candidates.iter().all(|candidate| !candidate.contains(IS1)));
+    }
 
     // Test-only reusable Win32 HANDLE RAII helper.
     // If a future non-test path needs the same pattern, move it out of this test module.
