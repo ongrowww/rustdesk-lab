@@ -11,15 +11,15 @@ VM-Test nicht.
 - Separater Testclient für die eingehende Supportverbindung
 - Lab-Gerät und Testkonto in Support Control
 - Artefakt `ongrow-support-desk-1.4.9-windows-x64-unsigned-lab`
-- Prüfsummendatei `ongrow_support_desk.exe.sha256`
+- Prüfsummendatei `OnGROW Support Desk.exe.sha256`
 - Protokollvorlage am Ende dieses Dokuments
 
 ## Testablauf
 
 ### 1. Prüfsumme
 
-- [ ] SHA-256 der EXE mit `Get-FileHash .\ongrow_support_desk.exe -Algorithm SHA256` berechnen.
-- [ ] Ergebnis mit `ongrow_support_desk.exe.sha256` vergleichen.
+- [ ] SHA-256 der EXE mit `Get-FileHash '.\OnGROW Support Desk.exe' -Algorithm SHA256` berechnen.
+- [ ] Ergebnis mit `OnGROW Support Desk.exe.sha256` vergleichen.
 - [ ] Test abbrechen, wenn die Prüfsumme abweicht.
 
 ### 2. Portable App und Produktidentität

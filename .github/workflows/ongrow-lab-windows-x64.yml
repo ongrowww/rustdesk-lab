@@ -276,6 +276,7 @@ jobs:
           cargo test --locked --lib --features flutter ongrow_control
           cargo test --locked --lib --features flutter ui_interface::tests
           cargo test --locked --lib --features flutter uninstall_candidates
+          cargo test --locked --lib --features flutter service_commands
 
       - name: Build unsigned Windows x64 customer desk
         shell: pwsh
@@ -286,7 +287,7 @@ jobs:
         shell: pwsh
         run: |
           $release = Resolve-Path "flutter/build/windows/x64/runner/Release"
-          $exe = Join-Path $release "ongrow_support_desk.exe"
+          $exe = Join-Path $release "OnGROW Support Desk.exe"
           $core = Join-Path $release "librustdesk.dll"
           if (-not (Test-Path $exe -PathType Leaf)) { throw "OnGROW executable is missing" }
           if (-not (Test-Path $core -PathType Leaf)) { throw "Rust core DLL is missing" }
@@ -301,7 +302,7 @@ jobs:
           if ($version.CompanyName -ne "OnGROW GmbH") { throw "Unexpected CompanyName" }
           if ($version.ProductName -ne "OnGROW Support Desk") { throw "Unexpected ProductName" }
           if ($version.InternalName -ne "ongrow_support_desk") { throw "Unexpected InternalName" }
-          if ($version.OriginalFilename -ne "ongrow_support_desk.exe") { throw "Unexpected OriginalFilename" }
+          if ($version.OriginalFilename -ne "OnGROW Support Desk.exe") { throw "Unexpected OriginalFilename" }
 
           Add-Type @'
           using System;
@@ -348,10 +349,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
           Copy-Item -Recurse -Force "$release/*" $artifact
           Copy-Item ongrow-build-provenance.txt $artifact
-          $stagedExe = Join-Path $artifact "ongrow_support_desk.exe"
+          $stagedExe = Join-Path $artifact "OnGROW Support Desk.exe"
           $digest = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$digest  ongrow_support_desk.exe" | Set-Content -Encoding ascii (Join-Path $artifact "ongrow_support_desk.exe.sha256")
-          $recorded = ((Get-Content (Join-Path $artifact "ongrow_support_desk.exe.sha256")) -split " ")[0]
+          "$digest  OnGROW Support Desk.exe" | Set-Content -Encoding ascii (Join-Path $artifact "OnGROW Support Desk.exe.sha256")
+          $recorded = ((Get-Content (Join-Path $artifact "OnGROW Support Desk.exe.sha256")) -split " ")[0]
           $actual = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($recorded -ne $actual) { throw "Staged executable checksum mismatch" }
 
