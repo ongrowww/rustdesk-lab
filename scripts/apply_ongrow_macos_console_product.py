@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 REPLACEMENTS = {
+    Path("build.py"): [
+        ("OnGROW Support Desk.app/Contents/MacOS/", "OnGROW Support Console.app/Contents/MacOS/"),
+    ],
     Path("flutter/macos/Runner/Configs/AppInfo.xcconfig"): [
         ("PRODUCT_NAME = OnGROW Support Desk", "PRODUCT_NAME = OnGROW Support Console"),
         ("PRODUCT_BUNDLE_IDENTIFIER = de.ongrow.supportdesk", "PRODUCT_BUNDLE_IDENTIFIER = de.ongrow.supportconsole"),
