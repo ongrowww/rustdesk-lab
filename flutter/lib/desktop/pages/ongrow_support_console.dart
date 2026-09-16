@@ -3,7 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 
