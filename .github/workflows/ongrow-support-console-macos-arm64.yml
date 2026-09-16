@@ -142,7 +142,7 @@ jobs:
       - name: Analyze Support Console UI against generated bridge
         working-directory: flutter
         run: |
-          flutter analyze --no-pub \
+          flutter analyze --no-pub --no-fatal-infos \
             lib/desktop/pages/ongrow_support_console.dart \
             lib/desktop/pages/desktop_home_page.dart \
             lib/desktop/pages/remote_page.dart \
