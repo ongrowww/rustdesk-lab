@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/pages/ongrow_support_home.dart';
+import 'package:flutter_hbb/desktop/pages/ongrow_support_console.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -62,6 +63,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.build(context);
     if (bind.mainGetAppNameSync() == 'OnGROW Support Desk') {
       return const OnGrowSupportHome();
+    }
+    if (bind.mainGetAppNameSync() == 'OnGROW Support Console') {
+      return const OnGrowSupportConsole();
     }
     final isIncomingOnly = bind.isIncomingOnly();
     return _buildBlock(

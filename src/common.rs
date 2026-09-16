@@ -1013,6 +1013,8 @@ pub fn is_rustdesk() -> bool {
 pub fn get_uri_prefix() -> String {
     if is_rustdesk() {
         "rustdesk://".to_owned()
+    } else if get_app_name() == "OnGROW Support Console" {
+        "ongrow-support-console://".to_owned()
     } else {
         "ongrow-support://".to_owned()
     }
@@ -2085,9 +2087,11 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
+    enforce_ongrow_operator_role();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
+        enforce_ongrow_operator_role();
         return;
     }
     let Some(path) = std::env::current_exe().map_or(None, |x| x.parent().map(|x| x.to_path_buf()))
@@ -2103,6 +2107,15 @@ pub fn load_custom_client() {
             return;
         };
         read_custom_client(&data.trim());
+    }
+    enforce_ongrow_operator_role();
+}
+
+fn enforce_ongrow_operator_role() {
+    if get_app_name() == "OnGROW Support Console" {
+        let mut settings = config::HARD_SETTINGS.write().unwrap();
+        settings.insert("conn-type".to_owned(), "outgoing".to_owned());
+        settings.insert("disable-tcp-listen".to_owned(), "Y".to_owned());
     }
 }
 

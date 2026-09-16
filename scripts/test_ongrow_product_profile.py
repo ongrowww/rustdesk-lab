@@ -48,6 +48,13 @@ class ProductProfileTests(unittest.TestCase):
         self.assertNotIn("rs-ny.rustdesk.com", actual)
         self.assertNotIn("OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=", actual)
 
+    def test_support_console_profile_uses_separate_product_name(self) -> None:
+        directory, path = self.make_config()
+        self.addCleanup(directory.cleanup)
+        values = VALID | {"role": "support-console", "app_name": "OnGROW Support Console"}
+        apply_profile(path, **values)
+        self.assertIn("OnGROW Support Console", path.read_text(encoding="utf-8"))
+
     def test_invalid_inputs_fail_without_modifying_source(self) -> None:
         invalid = [
             {"role": "operator"},

@@ -2204,7 +2204,9 @@ Future<bool> initUniLinks() async {
   // check cold boot
   try {
     final initialLink = await getInitialLink();
-    print("initialLink: $initialLink");
+    if (bind.mainGetAppNameSync() != 'OnGROW Support Console') {
+      print("initialLink: $initialLink");
+    }
     if (initialLink == null || initialLink.isEmpty) {
       return false;
     }
@@ -2262,6 +2264,14 @@ setEnvTerminalAdmin() {
 
 // uri link handler
 bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
+  final rawUri = uriString ?? uri?.toString() ??
+      ((cmdArgs != null && cmdArgs.isNotEmpty) ? cmdArgs.first : null);
+  if (rawUri != null &&
+      bind.mainGetAppNameSync() == 'OnGROW Support Console') {
+    bind.mainHandleOngrowOperatorUriSync(uri: rawUri);
+    windowOnTop(null);
+    return true;
+  }
   List<String>? args;
   if (cmdArgs != null && cmdArgs.isNotEmpty) {
     args = cmdArgs;

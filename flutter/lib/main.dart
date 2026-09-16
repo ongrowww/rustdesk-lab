@@ -42,7 +42,9 @@ Future<void> main(List<String> args) async {
   earlyAssert();
   WidgetsFlutterBinding.ensureInitialized();
 
-  debugPrint("launch args: $args");
+  if (bind.mainGetAppNameSync() != 'OnGROW Support Console') {
+    debugPrint("launch args: $args");
+  }
   kBootArgs = List.from(args);
 
   if (!isDesktop) {

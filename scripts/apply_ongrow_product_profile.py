@@ -12,8 +12,12 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+PRODUCTS = {
+    "customer-desk": "OnGROW Support Desk",
+    "support-console": "OnGROW Support Console",
+}
 ROLE = "customer-desk"
-APP_NAME = "OnGROW Support Desk"
+APP_NAME = PRODUCTS[ROLE]
 CONFIG_PATH = Path("libs/hbb_common/src/config.rs")
 
 
@@ -81,10 +85,11 @@ def apply_profile(
     hbbs_public_key: str,
     control_plane_url: str,
 ) -> str:
-    if role != ROLE:
-        raise ProfileError(f"role must be {ROLE}")
-    if app_name != APP_NAME:
-        raise ProfileError(f"app name must be {APP_NAME}")
+    expected_app_name = PRODUCTS.get(role)
+    if expected_app_name is None:
+        raise ProfileError(f"role must be one of: {', '.join(PRODUCTS)}")
+    if app_name != expected_app_name:
+        raise ProfileError(f"app name must be {expected_app_name} for role {role}")
     host = _validate_hostname(rendezvous_host)
     key_bytes = _decode_public_key(hbbs_public_key)
     _validate_control_plane_url(control_plane_url)
@@ -99,7 +104,7 @@ def apply_profile(
     source = _replace_unique(
         source,
         'pub static ref APP_NAME: RwLock<String> = RwLock::new("RustDesk".to_owned());',
-        f'pub static ref APP_NAME: RwLock<String> = RwLock::new("{APP_NAME}".to_owned());',
+        f'pub static ref APP_NAME: RwLock<String> = RwLock::new("{expected_app_name}".to_owned());',
         "application name",
     )
     source = _replace_unique(
@@ -141,7 +146,7 @@ def main() -> int:
         )
     except (OSError, ProfileError) as exc:
         raise SystemExit(f"product profile rejected: {exc}") from exc
-    print(f"OnGROW customer profile applied; hbbs key sha256={fingerprint}")
+    print(f"OnGROW {args.role} profile applied; hbbs key sha256={fingerprint}")
     return 0
 
 

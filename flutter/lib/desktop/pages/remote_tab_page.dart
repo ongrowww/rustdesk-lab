@@ -102,6 +102,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           switchUuid: params['switch_uuid'],
           forceRelay: params['forceRelay'],
           isSharedPassword: params['isSharedPassword'],
+          operatorLaunchHandle: params['operator_launch_handle'],
         ),
       ));
       _update_remote_count();
@@ -475,6 +476,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           switchUuid: switchUuid,
           forceRelay: args['forceRelay'],
           isSharedPassword: args['isSharedPassword'],
+          operatorLaunchHandle: args['operator_launch_handle'],
         ),
       ));
     } else if (call.method == kWindowDisableGrabKeyboard) {

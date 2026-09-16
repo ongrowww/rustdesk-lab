@@ -195,7 +195,9 @@ extern "C" fn handle_open_urls(_self: &Object, _cmd: Sel, _: id, urls: id) -> ()
             let theurl = CStr::from_ptr(urls.objectAtIndex(i).absoluteString().UTF8String())
                 .to_string_lossy()
                 .into_owned();
-            log::debug!("URL received: {}", theurl);
+            if crate::get_app_name() != "OnGROW Support Console" {
+                log::debug!("URL received: {}", theurl);
+            }
             std::thread::spawn(move || crate::handle_url_scheme(theurl));
         }
     }

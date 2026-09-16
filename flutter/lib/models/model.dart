@@ -3758,6 +3758,7 @@ class FFI {
     int? tabWindowId,
     int? display,
     List<int>? displays,
+    String? operatorLaunchHandle,
   }) {
     closed = false;
     if (isMobile) mobileReset();
@@ -3790,20 +3791,26 @@ class FFI {
     // Else this session is a new one.
     if (isNewPeer) {
       // ignore: unused_local_variable
-      final addRes = bind.sessionAddSync(
-        sessionId: sessionId,
-        id: id,
-        isFileTransfer: isFileTransfer,
-        isViewCamera: isViewCamera,
-        isPortForward: isPortForward,
-        isRdp: isRdp,
-        isTerminal: isTerminal,
-        switchUuid: switchUuid ?? '',
-        forceRelay: forceRelay ?? false,
-        password: password ?? '',
-        isSharedPassword: isSharedPassword ?? false,
-        connToken: connToken,
-      );
+      final addRes = operatorLaunchHandle == null
+          ? bind.sessionAddSync(
+              sessionId: sessionId,
+              id: id,
+              isFileTransfer: isFileTransfer,
+              isViewCamera: isViewCamera,
+              isPortForward: isPortForward,
+              isRdp: isRdp,
+              isTerminal: isTerminal,
+              switchUuid: switchUuid ?? '',
+              forceRelay: forceRelay ?? false,
+              password: password ?? '',
+              isSharedPassword: isSharedPassword ?? false,
+              connToken: connToken,
+            )
+          : bind.operatorSessionAddSync(
+              sessionId: sessionId,
+              id: id,
+              launchHandle: operatorLaunchHandle,
+            );
     } else if (display != null) {
       if (displays == null) {
         debugPrint(

@@ -175,6 +175,42 @@ pub fn session_add_sync(
     }
 }
 
+pub fn operator_session_add_sync(
+    session_id: SessionID,
+    id: String,
+    launch_handle: String,
+) -> SyncReturn<String> {
+    let (password, launch_id, console_id) =
+        match crate::ongrow_operator::consume_launch(&launch_handle, &id) {
+            Ok(value) => value,
+            Err(error) => return SyncReturn(error.to_owned()),
+        };
+    let result = session_add(
+        &session_id,
+        &id,
+        false,
+        false,
+        false,
+        false,
+        false,
+        "",
+        false,
+        password,
+        false,
+        None,
+    );
+    match result {
+        Ok(_) => {
+            crate::ongrow_operator::acknowledge_async(launch_id, console_id);
+            SyncReturn(String::new())
+        }
+        Err(error) => SyncReturn(format!(
+            "Failed to add operator session with id {}, {}",
+            id, error
+        )),
+    }
+}
+
 pub fn session_start(
     events2ui: StreamSink<EventToUI>,
     session_id: SessionID,
@@ -995,6 +1031,18 @@ pub fn main_enable_ongrow_unattended(
 
 pub fn main_revoke_ongrow_unattended() -> String {
     crate::ongrow_control::revoke_unattended()
+}
+
+pub fn main_get_ongrow_operator_status_sync() -> SyncReturn<String> {
+    SyncReturn(crate::ongrow_operator::status())
+}
+
+pub fn main_take_ongrow_operator_launch_sync() -> SyncReturn<String> {
+    SyncReturn(crate::ongrow_operator::take_launch())
+}
+
+pub fn main_handle_ongrow_operator_uri_sync(uri: String) -> SyncReturn<bool> {
+    SyncReturn(crate::ongrow_operator::handle_uri(uri))
 }
 
 pub fn main_get_async_status() -> String {
