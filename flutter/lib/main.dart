@@ -42,9 +42,8 @@ Future<void> main(List<String> args) async {
   earlyAssert();
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (bind.mainGetAppNameSync() != 'OnGROW Support Console') {
-    debugPrint("launch args: $args");
-  }
+  // The native bridge is initialized later in initEnv. Startup arguments may
+  // contain registration tokens, so do not log them here.
   kBootArgs = List.from(args);
 
   if (!isDesktop) {
@@ -165,22 +164,30 @@ void runMainApp(bool startService) async {
     // Regular RustDesk links may run without a main window. The Support Console
     // stays visible so registration and launch state remain observable.
     final handledByUniLinks = await initUniLinks();
-    final handledByArgs = handleUriLink(cmdArgs: kBootArgs);
+    final handledByArgs =
+        !handledByUniLinks && handleUriLink(cmdArgs: kBootArgs);
     final isSupportConsole =
         bind.mainGetAppNameSync() == 'OnGROW Support Console';
     debugPrint("handled by uni links: $handledByUniLinks");
     if (!isSupportConsole && (handledByUniLinks || handledByArgs)) {
       windowManager.hide();
     } else {
-      windowManager.show();
-      windowManager.focus();
+      await windowManager.show();
+      await windowManager.focus();
       // Move registration of active main window here to prevent from async visible check.
       rustDeskWinManager.registerActiveWindow(kWindowMainId);
     }
-    windowManager.setOpacity(1);
-    windowManager.setTitle(getWindowName());
+    await windowManager.setOpacity(1);
+    await windowManager.setTitle(getWindowName());
     // Do not use `windowManager.setResizable()` here.
     setResizable(!bind.isIncomingOnly());
+    if (isSupportConsole) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (await windowManager.isVisible()) {
+        // Non-sensitive readiness signal for the packaged-app launch test.
+        debugPrint('ONGROW_CONSOLE_UI_READY');
+      }
+    }
   });
 }
 

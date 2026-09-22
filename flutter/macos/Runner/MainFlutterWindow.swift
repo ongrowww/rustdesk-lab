@@ -72,9 +72,7 @@ class MainFlutterWindow: NSWindow {
 
     override public func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         super.order(place, relativeTo: otherWin)
-        if Bundle.main.bundleIdentifier != "de.ongrow.supportconsole" {
-            hiddenWindowAtLaunch()
-        }
+        hiddenWindowAtLaunch()
     }
 
     /// Override window theme.

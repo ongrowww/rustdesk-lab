@@ -412,34 +412,13 @@ jobs:
         shell: bash
         run: |
           RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Console.app"
-          RUSTDESK_SMOKE_LOG="$RUNNER_TEMP/ongrow-support-console-smoke.log"
           RUSTDESK_EXECUTABLE="$(
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
               "$RUSTDESK_APP_PATH/Contents/Info.plist"
           )"
-          RUST_BACKTRACE=1 NSUnbufferedIO=YES \
-            "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE" \
-            >"$RUSTDESK_SMOKE_LOG" 2>&1 &
-          RUSTDESK_PID=$!
-          cleanup() {
-            kill "$RUSTDESK_PID" 2>/dev/null || true
-            wait "$RUSTDESK_PID" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          sleep 5
-          if ! kill -0 "$RUSTDESK_PID" 2>/dev/null; then
-            if wait "$RUSTDESK_PID"; then
-              RUSTDESK_EXIT=0
-            else
-              RUSTDESK_EXIT=$?
-            fi
-            echo "RustDesk exited during launch smoke test: $RUSTDESK_EXIT"
-            sed -n '1,240p' "$RUSTDESK_SMOKE_LOG"
-            find "$HOME/Library/Logs/DiagnosticReports" \
-              -type f -mmin -5 -print \
-              -exec tail -n 160 {} \; 2>/dev/null || true
-            exit 1
-          fi
+          python3 scripts/test_smoke_ongrow_console.py
+          python3 scripts/smoke_ongrow_console.py \
+            "$RUSTDESK_APP_PATH/Contents/MacOS/$RUSTDESK_EXECUTABLE"
 
       - name: Create and verify unsigned DMG
         shell: bash
