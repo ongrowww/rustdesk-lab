@@ -9,6 +9,7 @@ import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/ongrow_device_enrollment.dart';
 import 'package:flutter_hbb/common/ongrow_support_id.dart';
 import 'package:flutter_hbb/common/ongrow_permission_guide.dart';
+import 'package:flutter_hbb/common/ongrow_permission_onboarding.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:ongrow_support_ui/ongrow_support_view.dart';
@@ -35,6 +36,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   var _canAcceptIncomingConnections = !isMacOS;
   var _unattendedStatusRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
   var _unattendedActionRunning = false;
+  var _onboardingStartupChecked = false;
   var _snapshot = const OnGrowSupportSnapshot(
     supportId: '',
     ready: false,
@@ -57,6 +59,14 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       const Duration(seconds: 1),
       (_) => _refresh(),
     );
+    if (isMacOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final local = _localPermissionSnapshot();
+        setState(() => _snapshot = local);
+        _maybeStartPermissionOnboarding(local);
+      });
+    }
   }
 
   @override
@@ -255,6 +265,63 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     _maybeAssignAutomaticSupportId(next);
     _maybeSyncControlPlane(next);
     return next;
+  }
+
+  OnGrowSupportSnapshot _localPermissionSnapshot() => _snapshot.copyWith(
+        canRecordScreen: bind.mainIsCanScreenRecording(prompt: false),
+        isProcessTrusted: bind.mainIsProcessTrusted(prompt: false),
+        canMonitorInput: bind.mainIsCanInputMonitoring(prompt: false),
+      );
+
+  void _maybeStartPermissionOnboarding(OnGrowSupportSnapshot snapshot) {
+    if (_onboardingStartupChecked) return;
+    _onboardingStartupChecked = true;
+    final saved = bind.mainGetLocalOption(
+      key: OnGrowPermissionOnboarding.optionKey,
+    );
+    final step = OnGrowPermissionOnboarding.startupStep(
+      saved: saved,
+      screen: snapshot.canRecordScreen,
+      accessibility: snapshot.isProcessTrusted,
+      input: snapshot.canMonitorInput,
+    );
+    if (step == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_startPermissionOnboarding(step));
+    });
+  }
+
+  Future<void> _startPermissionOnboarding(int step) async {
+    // Write before opening Settings: macOS may terminate us for a relaunch.
+    await bind.mainSetLocalOption(
+      key: OnGrowPermissionOnboarding.optionKey,
+      value: 'active',
+    );
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => OnGrowPermissionHelpDialog(
+        initialSnapshot: _snapshot,
+        actions: _actions,
+        initialStep: step,
+        autoStart: true,
+      ),
+    );
+    await OnGrowPermissionGuide.close();
+    if (!mounted) return;
+    final snapshot = _localPermissionSnapshot();
+    if (OnGrowPermissionOnboarding.nextStep(
+      screen: snapshot.canRecordScreen,
+      accessibility: snapshot.isProcessTrusted,
+      input: snapshot.canMonitorInput,
+    ) == null) {
+      await bind.mainSetLocalOption(
+        key: OnGrowPermissionOnboarding.optionKey,
+        value: OnGrowPermissionOnboarding.complete,
+      );
+    }
+    // If dismissed while incomplete, leave 'active' for the next launch.
+    // Never reopen a dismissed assistant repeatedly in the current session.
   }
 
   void _maybeSyncControlPlane(OnGrowSupportSnapshot snapshot) {
@@ -471,11 +538,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return OnGrowSupportView(
-      snapshot: _snapshot,
-      actions: OnGrowSupportActions(
+  OnGrowSupportActions get _actions => OnGrowSupportActions(
         copySupportId: _copySupportId,
         requestSupport: _openSupportEmail,
         openSettings: DesktopTabPage.onAddSetting,
@@ -487,7 +550,14 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
         refresh: _refresh,
         enableUnattended: _enableUnattended,
         revokeUnattended: _revokeUnattended,
-      ),
+        closePermissionGuide: OnGrowPermissionGuide.close,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return OnGrowSupportView(
+      snapshot: _snapshot,
+      actions: _actions,
     );
   }
 }

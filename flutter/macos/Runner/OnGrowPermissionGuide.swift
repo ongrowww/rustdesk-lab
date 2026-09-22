@@ -60,6 +60,7 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         panel.title = "\(pane.title) einrichten"
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
+        panel.appearance = owner?.appearance
         panel.level = .floating
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.delegate = self
@@ -206,6 +207,7 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
 
     private func followSettings() {
         guard let panel = panel, !dragging, panel.attachedSheet == nil else { return }
+        panel.appearance = owner?.appearance
         guard let settings = NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.apple.systempreferences").first else {
             if Date().timeIntervalSince(openedAt) > 5 { dismiss(restoreFocus: false) }

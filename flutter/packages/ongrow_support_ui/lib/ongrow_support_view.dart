@@ -2,6 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'ongrow_console_colors.dart';
+
+OnGrowConsoleColors _colors(BuildContext context) =>
+    OnGrowConsoleColors.forBrightness(Theme.of(context).brightness);
 
 const ongrowViolet = Color(0xFF7516F8);
 const ongrowVioletDark = Color(0xFF381061);
@@ -86,6 +90,7 @@ class OnGrowSupportActions {
     required this.refresh,
     required this.enableUnattended,
     required this.revokeUnattended,
+    this.closePermissionGuide,
   });
 
   final Future<void> Function() copySupportId;
@@ -99,6 +104,7 @@ class OnGrowSupportActions {
   final Future<OnGrowSupportSnapshot> Function() refresh;
   final Future<void> Function() enableUnattended;
   final Future<void> Function() revokeUnattended;
+  final Future<void> Function()? closePermissionGuide;
 }
 
 class OnGrowSupportView extends StatelessWidget {
@@ -113,11 +119,11 @@ class OnGrowSupportView extends StatelessWidget {
 
   Future<void> _showPermissionHelp(
     BuildContext context, {
-    int initialStep = 1,
+    int initialStep = 0,
   }) {
     return showDialog<void>(
       context: context,
-      barrierColor: const Color(0x7A0E0919),
+      barrierColor: Color(0x7A0E0919),
       builder: (_) => OnGrowPermissionHelpDialog(
         initialSnapshot: snapshot,
         actions: actions,
@@ -129,7 +135,7 @@ class OnGrowSupportView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: ongrowCanvas,
+      color: _colors(context).canvas,
       child: Column(
         children: [
           Expanded(
@@ -150,7 +156,7 @@ class OnGrowSupportView extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           left,
-                          const SizedBox(height: 28),
+                          SizedBox(height: 28),
                           right,
                         ],
                       )
@@ -158,17 +164,17 @@ class OnGrowSupportView extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(child: left),
-                          const SizedBox(width: 44),
+                          SizedBox(width: 44),
                           Expanded(child: right),
                         ],
                       );
                 return SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(40, 34, 40, 30),
+                  padding: EdgeInsets.fromLTRB(40, 34, 40, 30),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       primary,
-                      const SizedBox(height: 24),
+                      SizedBox(height: 24),
                       _UnattendedAccessCard(
                         snapshot: snapshot,
                         actions: actions,
@@ -199,7 +205,7 @@ class _SupportColumn extends StatelessWidget {
   Future<void> _showSupportRequest(BuildContext context) {
     return showDialog<void>(
       context: context,
-      barrierColor: const Color(0x940E0919),
+      barrierColor: Color(0x940E0919),
       builder: (_) => OnGrowSupportRequestDialog(
         snapshot: snapshot,
         actions: actions,
@@ -215,48 +221,50 @@ class _SupportColumn extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Expanded(
-              child: Text(
-                'OnGROW Support Desk',
-                style: TextStyle(
-                  color: ongrowInk,
-                  fontSize: 32,
-                  fontWeight: FontWeight.w700,
-                  height: 1.2,
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SvgPicture.asset(
+                  'assets/ongrow-logo.svg',
+                  package: 'ongrow_support_ui',
+                  width: 196,
+                  height: 32,
+                  semanticsLabel: 'OnGROW Support Desk',
+                  colorFilter: ColorFilter.mode(_colors(context).link, BlendMode.srcIn),
                 ),
               ),
             ),
             _ReadyPill(ready: snapshot.ready),
           ],
         ),
-        const SizedBox(height: 10),
-        const Text(
+        SizedBox(height: 10),
+        Text(
           'Teile deine Support-ID erst, wenn du mit unserem Team sprichst. '
           'Jede Verbindung wird sichtbar angekündigt.',
           style: TextStyle(
-            color: Color(0xFF575061),
+            color: _colors(context).muted,
             fontSize: 15,
             height: 1.45,
           ),
         ),
-        const SizedBox(height: 24),
+        SizedBox(height: 24),
         Container(
-          padding: const EdgeInsets.fromLTRB(24, 14, 24, 22),
+          padding: EdgeInsets.fromLTRB(24, 14, 24, 22),
           decoration: BoxDecoration(
-            color: const Color(0xFFF8F4FF),
+            color: _colors(context).inset,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFD4C3F0)),
+            border: Border.all(color: _colors(context).outline),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Deine Support-ID',
                       style: TextStyle(
-                        color: Color(0xFF2E1C3D),
+                        color: _colors(context).text,
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                       ),
@@ -265,12 +273,12 @@ class _SupportColumn extends StatelessWidget {
                   IconButton(
                     tooltip: 'Einstellungen',
                     onPressed: actions.openSettings,
-                    icon: const Icon(Icons.more_vert, size: 20),
-                    color: const Color(0xFF6541C7),
+                    icon: Icon(Icons.more_vert, size: 20),
+                    color: _colors(context).link,
                     style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFFF4F0FF),
-                      minimumSize: const Size(32, 32),
-                      maximumSize: const Size(32, 32),
+                      backgroundColor: _colors(context).inset,
+                      minimumSize: Size(32, 32),
+                      maximumSize: Size(32, 32),
                       padding: EdgeInsets.zero,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(9),
@@ -279,12 +287,12 @@ class _SupportColumn extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               Container(
                 height: 70,
-                padding: const EdgeInsets.only(left: 16, right: 12),
+                padding: EdgeInsets.only(left: 16, right: 12),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: _colors(context).surface,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -292,8 +300,8 @@ class _SupportColumn extends StatelessWidget {
                     Expanded(
                       child: Text(
                         id.isEmpty ? 'ID wird geladen …' : id,
-                        style: const TextStyle(
-                          color: ongrowVioletDark,
+                        style: TextStyle(
+                          color: _colors(context).text,
                           fontSize: 28,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 1.2,
@@ -303,12 +311,12 @@ class _SupportColumn extends StatelessWidget {
                     IconButton(
                       tooltip: 'Support-ID kopieren',
                       onPressed: id.isEmpty ? null : actions.copySupportId,
-                      icon: const Icon(Icons.copy_rounded, size: 18),
-                      color: ongrowViolet,
+                      icon: Icon(Icons.copy_rounded, size: 18),
+                      color: _colors(context).link,
                       style: IconButton.styleFrom(
-                        backgroundColor: const Color(0xFFEDE6FB),
-                        minimumSize: const Size(38, 38),
-                        maximumSize: const Size(38, 38),
+                        backgroundColor: _colors(context).inset,
+                        minimumSize: Size(38, 38),
+                        maximumSize: Size(38, 38),
                         padding: EdgeInsets.zero,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
@@ -318,7 +326,7 @@ class _SupportColumn extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
+              SizedBox(height: 18),
               SizedBox(
                 height: 50,
                 child: ElevatedButton(
@@ -331,9 +339,9 @@ class _SupportColumn extends StatelessWidget {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: EdgeInsets.symmetric(horizontal: 20),
                   ),
-                  child: const Row(
+                  child: Row(
                     children: [
                       Expanded(
                         child: Text(
@@ -349,10 +357,10 @@ class _SupportColumn extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-              const Text(
+              SizedBox(height: 16),
+              Text(
                 'Eine Verbindung beginnt niemals automatisch.',
-                style: TextStyle(color: ongrowMuted, fontSize: 12),
+                style: TextStyle(color: _colors(context).muted, fontSize: 12),
               ),
             ],
           ),
@@ -370,9 +378,9 @@ class _ReadyPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-      decoration: const ShapeDecoration(
-        color: Color(0xFFF0EAF9),
+      padding: EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: ShapeDecoration(
+        color: _colors(context).inset,
         shape: StadiumBorder(),
       ),
       child: Row(
@@ -382,15 +390,15 @@ class _ReadyPill extends StatelessWidget {
             width: 7,
             height: 7,
             decoration: BoxDecoration(
-              color: ready ? const Color(0xFF9FCB31) : const Color(0xFFE05B68),
+              color: ready ? Color(0xFF9FCB31) : Color(0xFFE05B68),
               shape: BoxShape.circle,
             ),
           ),
-          const SizedBox(width: 7),
+          SizedBox(width: 7),
           Text(
             ready ? 'Bereit für Support' : 'Verbindung wird geprüft',
-            style: const TextStyle(
-              color: Color(0xFF514A57),
+            style: TextStyle(
+              color: _colors(context).muted,
               fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
@@ -417,89 +425,89 @@ class _PermissionsColumn extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Text(
                 'Mac-Berechtigungen',
                 style: TextStyle(
-                  color: ongrowInk,
+                  color: _colors(context).text,
                   fontSize: 22,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
             TextButton.icon(
-              onPressed: () => openHelp(1),
-              icon: const Icon(Icons.help_outline_rounded, size: 14),
-              label: const Text('Einrichtungshilfe'),
+              onPressed: () => openHelp(0),
+              icon: Icon(Icons.help_outline_rounded, size: 14),
+              label: Text('Einrichtungshilfe'),
               style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF334F14),
-                backgroundColor: const Color(0xFFE8F9BE),
-                textStyle: const TextStyle(
+                foregroundColor: Color(0xFF334F14),
+                backgroundColor: Color(0xFFE8F9BE),
+                textStyle: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
-                minimumSize: const Size(0, 28),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: const StadiumBorder(),
+                minimumSize: Size(0, 28),
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                shape: StadiumBorder(),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 4),
-        const Text(
+        SizedBox(height: 4),
+        Text(
           'Damit wir sehen und helfen können – du behältst die Kontrolle.',
-          style: TextStyle(color: ongrowMuted, fontSize: 13),
+          style: TextStyle(color: _colors(context).muted, fontSize: 13),
         ),
-        const SizedBox(height: 20),
+        SizedBox(height: 20),
         Container(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: _colors(context).surface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE3DFE9)),
+            border: Border.all(color: _colors(context).outline),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'Vor dem ersten Support',
                 style: TextStyle(
-                  color: Color(0xFF40304A),
+                  color: _colors(context).text,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               _PermissionOverviewRow(
                 icon: Icons.desktop_mac_outlined,
-                iconColor: const Color(0xFF719000),
+                iconColor: _colors(context).link,
                 title: 'Bildschirmaufnahme',
                 detail: 'Ermöglicht die Bildschirmansicht',
                 granted: snapshot.canRecordScreen,
                 onPressed: snapshot.canRecordScreen ? null : () => openHelp(0),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               _PermissionOverviewRow(
                 icon: Icons.accessibility_new_rounded,
-                iconColor: ongrowViolet,
+                iconColor: _colors(context).link,
                 title: 'Bedienungshilfen',
                 detail: 'Erlaubt die Fernsteuerung von Maus und Tastatur',
                 granted: snapshot.isProcessTrusted,
                 onPressed: snapshot.isProcessTrusted ? null : () => openHelp(1),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               _PermissionOverviewRow(
                 icon: Icons.keyboard_alt_outlined,
-                iconColor: const Color(0xFF5A4B6C),
+                iconColor: _colors(context).muted,
                 title: 'Eingabeüberwachung',
                 detail: 'Erkennt lokale Eingaben während des Supports',
                 granted: snapshot.canMonitorInput,
                 onPressed: snapshot.canMonitorInput ? null : () => openHelp(2),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               _PermissionOverviewRow(
                 icon: Icons.router_outlined,
-                iconColor: const Color(0xFF6541C7),
+                iconColor: _colors(context).link,
                 title: 'Netzwerkzugriff',
                 detail: 'Erlaubt eingehende Supportverbindungen',
                 granted: snapshot.canAcceptIncomingConnections,
@@ -509,10 +517,10 @@ class _PermissionsColumn extends StatelessWidget {
                     ? null
                     : () => openHelp(3),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: 10),
               _PermissionOverviewRow(
                 icon: Icons.mic_none_rounded,
-                iconColor: const Color(0xFF81798A),
+                iconColor: _colors(context).muted,
                 title: 'Mikrofon',
                 detail: 'Nur für Sprachübertragung erforderlich',
                 granted: snapshot.canRecordAudio,
@@ -552,15 +560,15 @@ class _PermissionOverviewRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 72,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: ongrowSurface,
+        color: _colors(context).inset,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
           Icon(icon, color: iconColor, size: 28),
-          const SizedBox(width: 10),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -568,17 +576,17 @@ class _PermissionOverviewRow extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: Color(0xFF261F2E),
+                  style: TextStyle(
+                    color: _colors(context).text,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 3),
+                SizedBox(height: 3),
                 Text(
                   detail,
-                  style: const TextStyle(
-                    color: Color(0xFF6E6675),
+                  style: TextStyle(
+                    color: _colors(context).muted,
                     fontSize: 11,
                   ),
                 ),
@@ -586,7 +594,7 @@ class _PermissionOverviewRow extends StatelessWidget {
             ),
           ),
           if (granted)
-            const _StatusPill(
+            _StatusPill(
               label: '✓ Erlaubt',
               background: Color(0xFFE8F9BE),
               foreground: Color(0xFF4F6400),
@@ -594,15 +602,15 @@ class _PermissionOverviewRow extends StatelessWidget {
           else if (optional)
             _StatusPill(
               label: statusLabel ?? 'Optional',
-              background: const Color(0xFFEDEBF0),
-              foreground: const Color(0xFF5C5463),
+              background: _colors(context).inset,
+              foreground: _colors(context).muted,
               onPressed: onPressed,
             )
           else
             _StatusPill(
               label: statusLabel ?? 'Öffnen →',
-              background: const Color(0xFFEDE6FB),
-              foreground: ongrowViolet,
+              background: _colors(context).inset,
+              foreground: _colors(context).link,
               onPressed: onPressed,
             ),
         ],
@@ -627,7 +635,7 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       child: Text(
         label,
         style: TextStyle(
@@ -641,16 +649,16 @@ class _StatusPill extends StatelessWidget {
       return DecoratedBox(
         decoration: ShapeDecoration(
           color: background,
-          shape: const StadiumBorder(),
+          shape: StadiumBorder(),
         ),
         child: content,
       );
     }
     return Material(
       color: background,
-      shape: const StadiumBorder(),
+      shape: StadiumBorder(),
       child: InkWell(
-        customBorder: const StadiumBorder(),
+        customBorder: StadiumBorder(),
         onTap: onPressed,
         child: content,
       ),
@@ -673,8 +681,8 @@ class _UnattendedAccessCard extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      barrierColor: const Color(0x940E0919),
-      builder: (_) => const _ConfirmUnattendedDialog(enable: true),
+      barrierColor: Color(0x940E0919),
+      builder: (_) => _ConfirmUnattendedDialog(enable: true),
     );
     if (confirmed == true) {
       await actions.enableUnattended();
@@ -685,8 +693,8 @@ class _UnattendedAccessCard extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      barrierColor: const Color(0x940E0919),
-      builder: (_) => const _ConfirmUnattendedDialog(enable: false),
+      barrierColor: Color(0x940E0919),
+      builder: (_) => _ConfirmUnattendedDialog(enable: false),
     );
     if (confirmed == true) {
       await actions.revokeUnattended();
@@ -695,7 +703,7 @@ class _UnattendedAccessCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final presentation = _UnattendedPresentation.from(snapshot);
+    final presentation = _UnattendedPresentation.from(snapshot, _colors(context));
     final busy =
         snapshot.unattendedStatus == OnGrowUnattendedStatus.preparing ||
             snapshot.unattendedStatus == OnGrowUnattendedStatus.revoking;
@@ -729,11 +737,11 @@ class _UnattendedAccessCard extends StatelessWidget {
       liveRegion: true,
       label: 'Unbeaufsichtigter Zugriff: ${presentation.badge}',
       child: Container(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+        padding: EdgeInsets.fromLTRB(18, 16, 18, 16),
         decoration: BoxDecoration(
-          color: ongrowSurface,
+          color: _colors(context).inset,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE3DFE9)),
+          border: Border.all(color: _colors(context).outline),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -747,14 +755,15 @@ class _UnattendedAccessCard extends StatelessWidget {
                   width: 9,
                   height: 9,
                   decoration: BoxDecoration(
-                    color: presentation.foreground,
+                    color: snapshot.unattendedStatus == OnGrowUnattendedStatus.enabled
+                        ? OnGrowConsoleColors.success : _colors(context).muted,
                     shape: BoxShape.circle,
                   ),
                 ),
-                const Text(
+                Text(
                   'Unbeaufsichtigter Zugriff',
                   style: TextStyle(
-                    color: ongrowInk,
+                    color: _colors(context).text,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
@@ -766,16 +775,16 @@ class _UnattendedAccessCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             Text(
               presentation.description,
-              style: const TextStyle(
-                color: ongrowMuted,
+              style: TextStyle(
+                color: _colors(context).muted,
                 fontSize: 13,
                 height: 1.35,
               ),
             ),
-            const SizedBox(height: 10),
+            SizedBox(height: 10),
             if (busy)
               Row(
                 children: [
@@ -784,14 +793,14 @@ class _UnattendedAccessCard extends StatelessWidget {
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: presentation.foreground,
+                      color: _colors(context).link,
                     ),
                   ),
-                  const SizedBox(width: 9),
+                  SizedBox(width: 9),
                   Text(
                     presentation.actionLabel,
-                    style: const TextStyle(
-                      color: ongrowMuted,
+                    style: TextStyle(
+                      color: _colors(context).muted,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -804,24 +813,24 @@ class _UnattendedAccessCard extends StatelessWidget {
                 style: OutlinedButton.styleFrom(
                   foregroundColor: snapshot.unattendedStatus ==
                           OnGrowUnattendedStatus.enabled
-                      ? ongrowInk
+                      ? _colors(context).text
                       : Colors.white,
                   backgroundColor: snapshot.unattendedStatus ==
                           OnGrowUnattendedStatus.enabled
-                      ? Colors.white
+                      ? _colors(context).surface
                       : ongrowViolet,
                   side: BorderSide(
                     color: snapshot.unattendedStatus ==
                             OnGrowUnattendedStatus.enabled
-                        ? const Color(0xFFE3DFE9)
+                        ? _colors(context).outline
                         : ongrowViolet,
                   ),
-                  minimumSize: const Size(48, 44),
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  minimumSize: Size(48, 44),
+                  padding: EdgeInsets.symmetric(horizontal: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(9),
                   ),
-                  textStyle: const TextStyle(
+                  textStyle: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -850,19 +859,20 @@ class _UnattendedPresentation {
   final Color background;
   final Color foreground;
 
-  factory _UnattendedPresentation.from(OnGrowSupportSnapshot snapshot) {
+  factory _UnattendedPresentation.from(
+      OnGrowSupportSnapshot snapshot, OnGrowConsoleColors colors) {
     switch (snapshot.unattendedStatus) {
       case OnGrowUnattendedStatus.preparing:
-        return const _UnattendedPresentation(
+        return _UnattendedPresentation(
           badge: 'Wird vorbereitet',
           description:
               'Das Gerätepasswort wird lokal erzeugt und verschlüsselt an OnGROW übertragen.',
           actionLabel: 'Bitte einen Moment warten …',
-          background: Color(0xFFEDE6FB),
-          foreground: Color(0xFF6541C7),
+          background: colors.inset,
+          foreground: colors.link,
         );
       case OnGrowUnattendedStatus.enabled:
-        return const _UnattendedPresentation(
+        return _UnattendedPresentation(
           badge: 'Freigegeben',
           description:
               'OnGROW darf bei Supportbedarf auch ohne anwesende Person auf dieses Gerät zugreifen.',
@@ -887,17 +897,19 @@ class _UnattendedPresentation {
               'Freigabe zurücksetzen',
             _ => 'Einrichtung fortsetzen',
           },
-          background: const Color(0xFFFFF3D6),
-          foreground: const Color(0xFF7A4D00),
+          background: colors == OnGrowConsoleColors.dark
+              ? Color(0xFF3D3017) : Color(0xFFFFF3D6),
+          foreground: colors == OnGrowConsoleColors.dark
+              ? Color(0xFFFFD687) : Color(0xFF7A4D00),
         );
       case OnGrowUnattendedStatus.revoking:
-        return const _UnattendedPresentation(
+        return _UnattendedPresentation(
           badge: 'Wird widerrufen',
           description:
               'Der lokale Zugriff ist gesperrt. Die Serverbestätigung wird noch abgeschlossen.',
           actionLabel: 'Bitte einen Moment warten …',
-          background: Color(0xFFEDE6FB),
-          foreground: Color(0xFF6541C7),
+          background: colors.inset,
+          foreground: colors.link,
         );
       case OnGrowUnattendedStatus.error:
         return _UnattendedPresentation(
@@ -911,17 +923,17 @@ class _UnattendedPresentation {
           }.contains(snapshot.unattendedError)
               ? 'RustDesk-Einstellungen öffnen'
               : 'Erneut versuchen',
-          background: const Color(0xFFFDE9EC),
-          foreground: const Color(0xFFA12B3A),
+          background: colors.inset,
+          foreground: colors.error,
         );
       case OnGrowUnattendedStatus.notGranted:
-        return const _UnattendedPresentation(
+        return _UnattendedPresentation(
           badge: 'Nicht freigegeben',
           description:
               'OnGROW kann erst nach deiner ausdrücklichen Freigabe ohne eine Bestätigung vor Ort helfen.',
           actionLabel: 'Zugriff für OnGROW freigeben',
-          background: Color(0xFFEDEBF0),
-          foreground: Color(0xFF5C5463),
+          background: colors.inset,
+          foreground: colors.muted,
         );
     }
   }
@@ -964,9 +976,10 @@ class _ConfirmUnattendedDialog extends StatelessWidget {
         ? 'Unbeaufsichtigten Zugriff freigeben?'
         : 'Zugriff wirklich widerrufen?';
     return AlertDialog(
-      title: Text(title),
+      backgroundColor: _colors(context).surface,
+      title: Text(title, style: TextStyle(color: _colors(context).text)),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460),
+        constraints: BoxConstraints(maxWidth: 460),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -975,30 +988,30 @@ class _ConfirmUnattendedDialog extends StatelessWidget {
               enable
                   ? 'OnGROW darf bei Supportbedarf auf dieses Gerät zugreifen – auch wenn gerade niemand davor sitzt. Du kannst die Freigabe jederzeit widerrufen.'
                   : 'OnGROW kann sich danach nicht mehr unbeaufsichtigt verbinden. Eine bereits laufende Support-Sitzung wird beendet.',
-              style: const TextStyle(color: ongrowMuted, height: 1.4),
+              style: TextStyle(color: _colors(context).muted, height: 1.4),
             ),
-            const SizedBox(height: 14),
+            SizedBox(height: 14),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFEDE6FB),
+                color: _colors(context).inset,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.shield_outlined,
-                    color: Color(0xFF6541C7),
+                    color: _colors(context).link,
                     size: 18,
                   ),
-                  const SizedBox(width: 9),
+                  SizedBox(width: 9),
                   Expanded(
                     child: Text(
                       enable
                           ? 'Das Passwort bleibt geheim und wird verschlüsselt übertragen.'
                           : 'Der lokale Zugriff wird sofort gesperrt; die Serverbestätigung folgt.',
-                      style: const TextStyle(
-                        color: Color(0xFF6541C7),
+                      style: TextStyle(
+                        color: _colors(context).link,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),
@@ -1014,13 +1027,14 @@ class _ConfirmUnattendedDialog extends StatelessWidget {
         TextButton(
           autofocus: true,
           onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Abbrechen'),
+          child: Text('Abbrechen'),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(true),
           style: FilledButton.styleFrom(
-            backgroundColor: enable ? ongrowViolet : const Color(0xFFA12B3A),
-            minimumSize: const Size(48, 44),
+            backgroundColor: enable ? ongrowViolet : Color(0xFFA12B3A),
+            foregroundColor: Colors.white,
+            minimumSize: Size(48, 44),
           ),
           child: Text(enable ? 'Sicher freigeben' : 'Zugriff widerrufen'),
         ),
@@ -1038,26 +1052,27 @@ class _Footer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 56,
-      color: const Color(0xFFF6F5F9),
-      padding: const EdgeInsets.symmetric(horizontal: 40),
+      color: _colors(context).inset,
+      padding: EdgeInsets.symmetric(horizontal: 40),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.lock_outline_rounded,
             size: 14,
-            color: ongrowViolet,
+            color: _colors(context).link,
           ),
-          const SizedBox(width: 8),
-          const Expanded(
+          SizedBox(width: 8),
+          Expanded(
             child: Text(
               'Zugriff nur nach deiner ausdrücklichen Freigabe',
-              style: TextStyle(color: Color(0xFF595261), fontSize: 11),
+              style: TextStyle(color: _colors(context).muted, fontSize: 11),
             ),
           ),
           SvgPicture.asset(
             'assets/ongrow-logo.svg',
             width: 98,
             height: 16,
+            colorFilter: ColorFilter.mode(_colors(context).link, BlendMode.srcIn),
             package: 'ongrow_support_ui',
           ),
           Expanded(
@@ -1065,8 +1080,8 @@ class _Footer extends StatelessWidget {
               alignment: Alignment.centerRight,
               child: Text(
                 'OnGROW Support Desk${version.isEmpty ? '' : ' · $version'}',
-                style: const TextStyle(
-                  color: Color(0xFF736B7A),
+                style: TextStyle(
+                  color: _colors(context).muted,
                   fontSize: 11,
                 ),
               ),
@@ -1119,14 +1134,14 @@ class _OnGrowSupportRequestDialogState
     final version = widget.snapshot.version;
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
+      insetPadding: EdgeInsets.all(24),
       child: Container(
         width: 620,
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 22),
+        padding: EdgeInsets.fromLTRB(24, 24, 24, 22),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors(context).surface,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
               color: Color(0x3D140A26),
               blurRadius: 42,
@@ -1141,14 +1156,14 @@ class _OnGrowSupportRequestDialogState
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         'Support anfordern',
                         style: TextStyle(
-                          color: ongrowInk,
+                          color: _colors(context).text,
                           fontSize: 22,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1158,7 +1173,7 @@ class _OnGrowSupportRequestDialogState
                         'Wähle deinen Supportkontakt. Wir bereiten '
                         'anschließend eine E-Mail mit deiner Support-ID vor.',
                         style: TextStyle(
-                          color: Color(0xFF61596B),
+                          color: _colors(context).muted,
                           fontSize: 12,
                           height: 1.4,
                         ),
@@ -1166,15 +1181,15 @@ class _OnGrowSupportRequestDialogState
                     ],
                   ),
                 ),
-                const SizedBox(width: 18),
+                SizedBox(width: 18),
                 IconButton(
                   tooltip: 'Schließen',
                   onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close_rounded, size: 20),
+                  icon: Icon(Icons.close_rounded, size: 20),
                   style: IconButton.styleFrom(
-                    backgroundColor: const Color(0xFFF5F3F7),
-                    minimumSize: const Size(34, 34),
-                    maximumSize: const Size(34, 34),
+                    backgroundColor: _colors(context).inset,
+                    minimumSize: Size(34, 34),
+                    maximumSize: Size(34, 34),
                     padding: EdgeInsets.zero,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
@@ -1183,25 +1198,25 @@ class _OnGrowSupportRequestDialogState
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            const Text(
+            SizedBox(height: 16),
+            Text(
               'Supportkontakt',
               style: TextStyle(
-                color: Color(0xFF40304A),
+                color: _colors(context).text,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: 8),
             Container(
               height: 78,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding: EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                color: const Color(0xFFF8F4FF),
+                color: _colors(context).inset,
                 borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: ongrowViolet, width: 1.5),
+                border: Border.all(color: _colors(context).link, width: 1.5),
               ),
-              child: const Row(
+              child: Row(
                 children: [
                   _SupportAvatar(),
                   SizedBox(width: 12),
@@ -1213,7 +1228,7 @@ class _OnGrowSupportRequestDialogState
                         Text(
                           'OnGROW GmbH Kundensupport',
                           style: TextStyle(
-                            color: ongrowInk,
+                            color: _colors(context).text,
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
@@ -1222,7 +1237,7 @@ class _OnGrowSupportRequestDialogState
                         Text(
                           'support@ongrow.de',
                           style: TextStyle(
-                            color: ongrowMuted,
+                            color: _colors(context).muted,
                             fontSize: 12,
                           ),
                         ),
@@ -1231,48 +1246,48 @@ class _OnGrowSupportRequestDialogState
                   ),
                   Icon(
                     Icons.check_circle_rounded,
-                    color: ongrowViolet,
+                    color: _colors(context).link,
                     size: 22,
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Container(
               height: 64,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding: EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                color: ongrowSurface,
+                color: _colors(context).inset,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.mail_outline_rounded,
-                    color: ongrowViolet,
+                    color: _colors(context).link,
                     size: 20,
                   ),
-                  const SizedBox(width: 12),
+                  SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Wird in die E-Mail übernommen',
                           style: TextStyle(
-                            color: Color(0xFF40304A),
+                            color: _colors(context).text,
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Text(
                           'Support-ID ${widget.snapshot.supportId}'
                           '${version.isEmpty ? '' : '  ·  '
                               'OnGROW Support Desk $version'}',
-                          style: const TextStyle(
-                            color: ongrowMuted,
+                          style: TextStyle(
+                            color: _colors(context).muted,
                             fontSize: 12,
                           ),
                         ),
@@ -1282,12 +1297,12 @@ class _OnGrowSupportRequestDialogState
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            const Row(
+            SizedBox(height: 16),
+            Row(
               children: [
                 Icon(
                   Icons.lock_outline_rounded,
-                  color: ongrowMuted,
+                  color: _colors(context).muted,
                   size: 14,
                 ),
                 SizedBox(width: 7),
@@ -1295,12 +1310,12 @@ class _OnGrowSupportRequestDialogState
                   child: Text(
                     'Kein Passwort wird übermittelt. '
                     'Du sendest die E-Mail selbst.',
-                    style: TextStyle(color: ongrowMuted, fontSize: 11),
+                    style: TextStyle(color: _colors(context).muted, fontSize: 11),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -1308,20 +1323,20 @@ class _OnGrowSupportRequestDialogState
                   onPressed:
                       _openingEmail ? null : () => Navigator.of(context).pop(),
                   style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFF40304A),
-                    backgroundColor: const Color(0xFFF3F0F6),
-                    minimumSize: const Size(96, 44),
+                    foregroundColor: _colors(context).text,
+                    backgroundColor: _colors(context).inset,
+                    minimumSize: Size(96, 44),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(11),
                     ),
                   ),
-                  child: const Text('Abbrechen'),
+                  child: Text('Abbrechen'),
                 ),
-                const SizedBox(width: 10),
+                SizedBox(width: 10),
                 ElevatedButton.icon(
                   onPressed: _openingEmail ? null : _openEmail,
                   icon: _openingEmail
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
@@ -1329,15 +1344,15 @@ class _OnGrowSupportRequestDialogState
                             color: Colors.white,
                           ),
                         )
-                      : const Icon(Icons.mail_outline_rounded, size: 17),
-                  label: const Text('E-Mail-App öffnen'),
+                      : Icon(Icons.mail_outline_rounded, size: 17),
+                  label: Text('E-Mail-App öffnen'),
                   style: ElevatedButton.styleFrom(
                     elevation: 0,
                     foregroundColor: Colors.white,
                     backgroundColor: ongrowViolet,
                     disabledForegroundColor: Colors.white70,
-                    disabledBackgroundColor: const Color(0xFF9D76D3),
-                    minimumSize: const Size(190, 44),
+                    disabledBackgroundColor: Color(0xFF9D76D3),
+                    minimumSize: Size(190, 44),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(11),
                     ),
@@ -1361,14 +1376,14 @@ class _SupportAvatar extends StatelessWidget {
       width: 46,
       height: 46,
       alignment: Alignment.center,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Color(0xFFC9FF4A),
         shape: BoxShape.circle,
       ),
-      child: const Text(
+      child: Text(
         'OG',
         style: TextStyle(
-          color: ongrowInk,
+          color: OnGrowConsoleColors.onSuccess,
           fontSize: 13,
           fontWeight: FontWeight.w600,
         ),
@@ -1383,11 +1398,13 @@ class OnGrowPermissionHelpDialog extends StatefulWidget {
     required this.initialSnapshot,
     required this.actions,
     required this.initialStep,
+    this.autoStart = false,
   });
 
   final OnGrowSupportSnapshot initialSnapshot;
   final OnGrowSupportActions actions;
   final int initialStep;
+  final bool autoStart;
 
   @override
   State<OnGrowPermissionHelpDialog> createState() =>
@@ -1408,14 +1425,29 @@ class _OnGrowPermissionHelpDialogState
     _snapshot = widget.initialSnapshot;
     _expandedStep = widget.initialStep;
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      Duration(seconds: 1),
       (_) => _refreshSnapshot(),
     );
+    if (widget.autoStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final actions = [
+          widget.actions.requestScreenRecording,
+          widget.actions.requestAccessibility,
+          widget.actions.requestInputMonitoring,
+        ];
+        if (_expandedStep >= 0 && _expandedStep < actions.length) {
+          unawaited(_run(actions[_expandedStep]));
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    final close = widget.actions.closePermissionGuide;
+    if (close != null) unawaited(close());
     super.dispose();
   }
 
@@ -1427,7 +1459,16 @@ class _OnGrowPermissionHelpDialogState
     try {
       final refreshed = await widget.actions.refresh();
       if (mounted) {
-        setState(() => _snapshot = refreshed);
+        setState(() {
+          final wasComplete = _stepComplete(_snapshot, _expandedStep);
+          _snapshot = refreshed;
+          if (widget.autoStart && !wasComplete &&
+              _stepComplete(refreshed, _expandedStep)) {
+            _expandedStep = !refreshed.canRecordScreen ? 0
+                : !refreshed.isProcessTrusted ? 1
+                : !refreshed.canMonitorInput ? 2 : 3;
+          }
+        });
       }
     } finally {
       _refreshing = false;
@@ -1452,19 +1493,29 @@ class _OnGrowPermissionHelpDialogState
     }
   }
 
+  bool _stepComplete(OnGrowSupportSnapshot snapshot, int step) {
+    switch (step) {
+      case 0: return snapshot.canRecordScreen;
+      case 1: return snapshot.isProcessTrusted;
+      case 2: return snapshot.canMonitorInput;
+      case 3: return snapshot.canAcceptIncomingConnections;
+      default: return snapshot.canRecordAudio;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
+      insetPadding: EdgeInsets.all(24),
       child: Container(
         width: 640,
-        constraints: const BoxConstraints(maxHeight: 560),
-        padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+        constraints: BoxConstraints(maxHeight: 560),
+        padding: EdgeInsets.fromLTRB(24, 22, 24, 20),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: _colors(context).surface,
           borderRadius: BorderRadius.circular(18),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
               color: Color(0x3D140A26),
               blurRadius: 42,
@@ -1477,7 +1528,7 @@ class _OnGrowPermissionHelpDialogState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _DialogHeader(onClose: () => Navigator.of(context).pop()),
-            const SizedBox(height: 16),
+            SizedBox(height: 16),
             Flexible(
               child: SingleChildScrollView(
                 child: Column(
@@ -1489,7 +1540,7 @@ class _OnGrowPermissionHelpDialogState
                       expanded: _expandedStep == 0,
                       onToggle: () => setState(() => _expandedStep = 0),
                       child: _StepInstructions(
-                        instructions: const [
+                        instructions: [
                           'Öffne die Bildschirmaufnahme mit dem Button unten.',
                           'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
                           'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
@@ -1500,7 +1551,7 @@ class _OnGrowPermissionHelpDialogState
                             _run(widget.actions.requestScreenRecording),
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     _HelpStep(
                       title: 'Bedienungshilfen',
                       icon: Icons.accessibility_new_rounded,
@@ -1508,7 +1559,7 @@ class _OnGrowPermissionHelpDialogState
                       expanded: _expandedStep == 1,
                       onToggle: () => setState(() => _expandedStep = 1),
                       child: _StepInstructions(
-                        instructions: const [
+                        instructions: [
                           'Öffne die Bedienungshilfen mit dem Button unten.',
                           'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
                           'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
@@ -1519,7 +1570,7 @@ class _OnGrowPermissionHelpDialogState
                             _run(widget.actions.requestAccessibility),
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     _HelpStep(
                       title: 'Eingabeüberwachung',
                       icon: Icons.keyboard_alt_outlined,
@@ -1527,7 +1578,7 @@ class _OnGrowPermissionHelpDialogState
                       expanded: _expandedStep == 2,
                       onToggle: () => setState(() => _expandedStep = 2),
                       child: _StepInstructions(
-                        instructions: const [
+                        instructions: [
                           'Öffne die Eingabeüberwachung mit dem Button unten.',
                           'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
                           'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
@@ -1538,7 +1589,7 @@ class _OnGrowPermissionHelpDialogState
                             _run(widget.actions.requestInputMonitoring),
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     _HelpStep(
                       title: 'Netzwerkzugriff',
                       icon: Icons.router_outlined,
@@ -1549,7 +1600,7 @@ class _OnGrowPermissionHelpDialogState
                       expanded: _expandedStep == 3,
                       onToggle: () => setState(() => _expandedStep = 3),
                       child: _StepInstructions(
-                        instructions: const [
+                        instructions: [
                           'Erlaube eingehende Netzwerkverbindungen, '
                               'wenn macOS danach fragt.',
                           'Prüfe bei Bedarf unter Netzwerk → Firewall → '
@@ -1562,7 +1613,7 @@ class _OnGrowPermissionHelpDialogState
                             _run(widget.actions.openNetworkSettings),
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    SizedBox(height: 10),
                     _HelpStep(
                       title: 'Mikrofon',
                       icon: Icons.mic_none_rounded,
@@ -1571,7 +1622,7 @@ class _OnGrowPermissionHelpDialogState
                       expanded: _expandedStep == 4,
                       onToggle: () => setState(() => _expandedStep = 4),
                       child: _StepInstructions(
-                        instructions: const [
+                        instructions: [
                           'Diese Freigabe ist nur für Sprachübertragung nötig.',
                           'Bestätige den nativen macOS-Dialog.',
                         ],
@@ -1584,19 +1635,19 @@ class _OnGrowPermissionHelpDialogState
                 ),
               ),
             ),
-            const SizedBox(height: 14),
-            const Row(
+            SizedBox(height: 14),
+            Row(
               children: [
                 Icon(
                   Icons.lock_outline_rounded,
                   size: 16,
-                  color: Color(0xFF6B6470),
+                  color: _colors(context).muted,
                 ),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Die Freigabe erfolgt immer direkt durch dich in macOS.',
-                    style: TextStyle(color: Color(0xFF6B6470), fontSize: 11),
+                    style: TextStyle(color: _colors(context).muted, fontSize: 11),
                   ),
                 ),
               ],
@@ -1618,14 +1669,14 @@ class _DialogHeader extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 'Mac-Berechtigungen einrichten',
                 style: TextStyle(
-                  color: ongrowInk,
+                  color: _colors(context).text,
                   fontSize: 20,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1634,7 +1685,7 @@ class _DialogHeader extends StatelessWidget {
               Text(
                 'Öffne die Schritte nacheinander und erteile die '
                 'Freigaben direkt in macOS.',
-                style: TextStyle(color: Color(0xFF645E69), fontSize: 13),
+                style: TextStyle(color: _colors(context).muted, fontSize: 13),
               ),
             ],
           ),
@@ -1642,11 +1693,11 @@ class _DialogHeader extends StatelessWidget {
         IconButton(
           tooltip: 'Schließen',
           onPressed: onClose,
-          icon: const Icon(Icons.close_rounded, size: 20),
+          icon: Icon(Icons.close_rounded, size: 20),
           style: IconButton.styleFrom(
-            backgroundColor: const Color(0xFFF5F3F7),
-            minimumSize: const Size(34, 34),
-            maximumSize: const Size(34, 34),
+            backgroundColor: _colors(context).inset,
+            minimumSize: Size(34, 34),
+            maximumSize: Size(34, 34),
             padding: EdgeInsets.zero,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
@@ -1682,12 +1733,12 @@ class _HelpStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
+      duration: Duration(milliseconds: 160),
       decoration: BoxDecoration(
-        color: expanded ? const Color(0xFFF8F4FF) : ongrowSurface,
+        color: expanded ? _colors(context).inset : _colors(context).inset,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: expanded ? ongrowViolet : const Color(0xFFE3DFE9),
+          color: expanded ? _colors(context).link : _colors(context).outline,
           width: expanded ? 1.5 : 1,
         ),
       ),
@@ -1697,7 +1748,7 @@ class _HelpStep extends StatelessWidget {
             onTap: onToggle,
             borderRadius: BorderRadius.circular(12),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 13),
               child: Row(
                 children: [
                   Container(
@@ -1705,28 +1756,28 @@ class _HelpStep extends StatelessWidget {
                     height: 24,
                     decoration: BoxDecoration(
                       color: complete
-                          ? const Color(0xFFD9FAA7)
+                          ? Color(0xFFD9FAA7)
                           : expanded
                               ? ongrowViolet
-                              : const Color(0xFFEDEBF0),
+                              : _colors(context).inset,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       complete ? Icons.check_rounded : icon,
                       size: 16,
                       color: complete
-                          ? const Color(0xFF335B12)
+                          ? Color(0xFF335B12)
                           : expanded
                               ? Colors.white
-                              : const Color(0xFF665F6D),
+                              : _colors(context).muted,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       title,
-                      style: const TextStyle(
-                        color: Color(0xFF261F2E),
+                      style: TextStyle(
+                        color: _colors(context).text,
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1741,18 +1792,18 @@ class _HelpStep extends StatelessWidget {
                                 ? 'Optional'
                                 : 'Jetzt einrichten',
                     background: complete
-                        ? const Color(0xFFE8F9BE)
-                        : const Color(0xFFF0ECF8),
+                        ? Color(0xFFE8F9BE)
+                        : _colors(context).inset,
                     foreground:
-                        complete ? const Color(0xFF4F6400) : ongrowViolet,
+                        complete ? Color(0xFF4F6400) : _colors(context).link,
                   ),
-                  const SizedBox(width: 8),
+                  SizedBox(width: 8),
                   Icon(
                     expanded
                         ? Icons.keyboard_arrow_up_rounded
                         : Icons.keyboard_arrow_down_rounded,
                     size: 20,
-                    color: const Color(0xFF665F6D),
+                    color: _colors(context).muted,
                   ),
                 ],
               ),
@@ -1760,7 +1811,7 @@ class _HelpStep extends StatelessWidget {
           ),
           if (expanded)
             Padding(
-              padding: const EdgeInsets.fromLTRB(48, 0, 16, 16),
+              padding: EdgeInsets.fromLTRB(48, 0, 16, 16),
               child: child,
             ),
         ],
@@ -1789,17 +1840,17 @@ class _StepInstructions extends StatelessWidget {
       children: [
         for (var index = 0; index < instructions.length; index++)
           Padding(
-            padding: const EdgeInsets.only(bottom: 4),
+            padding: EdgeInsets.only(bottom: 4),
             child: Text(
               '${index + 1}. ${instructions[index]}',
-              style: const TextStyle(
-                color: Color(0xFF514A57),
+              style: TextStyle(
+                color: _colors(context).muted,
                 fontSize: 12,
                 height: 1.35,
               ),
             ),
           ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         Align(
           alignment: Alignment.centerLeft,
           child: _SettingsAction(
@@ -1830,15 +1881,15 @@ class _SettingsAction extends StatelessWidget {
       height: 38,
       child: OutlinedButton.icon(
         onPressed: busy ? null : onPressed,
-        icon: const Icon(Icons.settings_outlined, size: 16),
+        icon: Icon(Icons.settings_outlined, size: 16),
         label: Text(label),
         style: OutlinedButton.styleFrom(
           foregroundColor: Colors.white,
           backgroundColor: ongrowViolet,
           disabledForegroundColor: Colors.white70,
-          disabledBackgroundColor: const Color(0xFF9D76D3),
-          side: const BorderSide(color: ongrowViolet),
-          textStyle: const TextStyle(
+          disabledBackgroundColor: Color(0xFF9D76D3),
+          side: BorderSide(color: ongrowViolet),
+          textStyle: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
           ),
