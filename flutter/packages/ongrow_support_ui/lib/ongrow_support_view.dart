@@ -1490,9 +1490,9 @@ class _OnGrowPermissionHelpDialogState
                       onToggle: () => setState(() => _expandedStep = 0),
                       child: _StepInstructions(
                         instructions: const [
-                          'Systemeinstellungen öffnen.',
-                          'Datenschutz & Sicherheit → Bildschirmaufnahme wählen.',
-                          'OnGROW Support Desk aktivieren.',
+                          'Öffne die Bildschirmaufnahme mit dem Button unten.',
+                          'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
+                          'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
                         ],
                         buttonLabel: 'Bildschirmaufnahme öffnen',
                         busy: _busy,
@@ -1509,9 +1509,9 @@ class _OnGrowPermissionHelpDialogState
                       onToggle: () => setState(() => _expandedStep = 1),
                       child: _StepInstructions(
                         instructions: const [
-                          'Systemeinstellungen öffnen.',
-                          'Datenschutz & Sicherheit → Bedienungshilfen wählen.',
-                          'OnGROW Support Desk aktivieren.',
+                          'Öffne die Bedienungshilfen mit dem Button unten.',
+                          'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
+                          'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
                         ],
                         buttonLabel: 'Bedienungshilfen öffnen',
                         busy: _busy,
@@ -1528,9 +1528,9 @@ class _OnGrowPermissionHelpDialogState
                       onToggle: () => setState(() => _expandedStep = 2),
                       child: _StepInstructions(
                         instructions: const [
-                          'Systemeinstellungen öffnen.',
-                          'Datenschutz & Sicherheit → Eingabeüberwachung wählen.',
-                          'OnGROW Support Desk aktivieren.',
+                          'Öffne die Eingabeüberwachung mit dem Button unten.',
+                          'Ziehe das App-Icon aus dem Hilfsfenster in die Berechtigungsliste.',
+                          'Aktiviere OnGROW Support Desk und bestätige die Rückfrage von macOS. Ist die App bereits eingetragen, aktiviere nur den Schalter.',
                         ],
                         buttonLabel: 'Eingabeüberwachung öffnen',
                         busy: _busy,

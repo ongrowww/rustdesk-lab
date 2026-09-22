@@ -110,9 +110,11 @@ jobs:
           flutter test --no-pub test/ongrow_device_attestation_test.dart
           flutter test --no-pub test/ongrow_device_enrollment_test.dart
           flutter test --no-pub test/ongrow_support_view_test.dart
+          flutter test --no-pub test/ongrow_permission_guide_test.dart
           flutter analyze --no-pub \
             lib/common/ongrow_device_attestation.dart \
             lib/common/ongrow_device_enrollment.dart \
+            lib/common/ongrow_permission_guide.dart \
             packages/ongrow_support_ui/lib/ongrow_support_view.dart \
             test/ongrow_device_attestation_test.dart \
             test/ongrow_device_enrollment_test.dart \
@@ -169,6 +171,14 @@ jobs:
           ref: ${{ github.sha }}
           submodules: recursive
           persist-credentials: false
+
+      - name: Test native permission guide
+        run: |
+          xcrun swiftc -target arm64-apple-macosx11.0 \
+            flutter/macos/Runner/OnGrowPermissionGuide.swift \
+            scripts/test_ongrow_permission_guide.swift \
+            -o "$RUNNER_TEMP/permission-guide-test"
+          "$RUNNER_TEMP/permission-guide-test"
 
       - name: Validate and apply OnGROW product profile
         shell: bash

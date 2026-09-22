@@ -8,6 +8,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/ongrow_device_enrollment.dart';
 import 'package:flutter_hbb/common/ongrow_support_id.dart';
+import 'package:flutter_hbb/common/ongrow_permission_guide.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:ongrow_support_ui/ongrow_support_view.dart';
@@ -62,6 +63,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
+    if (isMacOS) unawaited(OnGrowPermissionGuide.close());
     super.dispose();
   }
 
@@ -246,6 +248,9 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     final next = await _readSnapshot();
     if (mounted) {
       setState(() => _snapshot = next);
+      if (isMacOS) {
+        await OnGrowPermissionGuide.update(_guideStatus(next));
+      }
     }
     _maybeAssignAutomaticSupportId(next);
     _maybeSyncControlPlane(next);
@@ -375,6 +380,12 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
 
   Future<void> _requestScreenRecording() async {
     if (isMacOS) {
+      if (await OnGrowPermissionGuide.show(
+        'screenRecording',
+        _guideStatus(_snapshot),
+      )) {
+        return;
+      }
       bind.mainIsCanScreenRecording(prompt: true);
     }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -382,6 +393,12 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
 
   Future<void> _requestAccessibility() async {
     if (isMacOS) {
+      if (await OnGrowPermissionGuide.show(
+        'accessibility',
+        _guideStatus(_snapshot),
+      )) {
+        return;
+      }
       bind.mainIsProcessTrusted(prompt: true);
     }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -389,6 +406,12 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
 
   Future<void> _requestInputMonitoring() async {
     if (isMacOS) {
+      if (await OnGrowPermissionGuide.show(
+        'inputMonitoring',
+        _guideStatus(_snapshot),
+      )) {
+        return;
+      }
       bind.mainIsCanInputMonitoring(prompt: true);
     }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -396,6 +419,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
 
   Future<void> _requestMicrophone() async {
     if (isMacOS) {
+      await OnGrowPermissionGuide.close();
       await osxRequestAudio();
     }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -405,6 +429,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
     if (!isMacOS) {
       return;
     }
+    await OnGrowPermissionGuide.close();
     final opened = await launchUrl(
       Uri.parse(
         'x-apple.systempreferences:com.apple.Network-Settings.extension',
@@ -415,6 +440,12 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       showToast('Netzwerkeinstellungen konnten nicht geöffnet werden');
     }
   }
+
+  Map<String, bool> _guideStatus(OnGrowSupportSnapshot snapshot) => {
+        'screenRecording': snapshot.canRecordScreen,
+        'accessibility': snapshot.isProcessTrusted,
+        'inputMonitoring': snapshot.canMonitorInput,
+      };
 
   Future<void> _openSupportEmail() async {
     final id = trimID(_snapshot.supportId);
