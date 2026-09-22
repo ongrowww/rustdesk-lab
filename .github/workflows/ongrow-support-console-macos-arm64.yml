@@ -150,6 +150,10 @@ jobs:
             lib/models/model.dart \
             lib/utils/multi_window_manager.dart
 
+      - name: Test Console contrast in light and dark mode
+        working-directory: flutter/packages/ongrow_support_ui
+        run: flutter test test/ongrow_console_colors_test.dart
+
       - name: Upload bridge artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

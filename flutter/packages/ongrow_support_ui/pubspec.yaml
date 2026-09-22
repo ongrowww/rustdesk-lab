@@ -11,6 +11,10 @@ dependencies:
     sdk: flutter
   flutter_svg: ^2.0.5
 
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
 flutter:
   uses-material-design: true
   assets:

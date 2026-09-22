@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
+import 'package:ongrow_support_ui/ongrow_console_colors.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class OnGrowSupportConsole extends StatefulWidget {
@@ -15,8 +16,8 @@ class OnGrowSupportConsole extends StatefulWidget {
 }
 
 class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
-  static const _purple = Color(0xFF7516F8);
-  static const _lime = Color(0xFFC7FF4A);
+  OnGrowConsoleColors get _colors =>
+      OnGrowConsoleColors.forBrightness(Theme.of(context).brightness);
   Timer? _timer;
   Map<String, dynamic> _status = const {'state': 'loading'};
   bool _opening = false;
@@ -101,63 +102,76 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
   Widget build(BuildContext context) {
     final state = _status['state'] as String? ?? 'loading';
     final isRegistered = (_status['console_id'] as String? ?? '').isNotEmpty;
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F5FA),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720),
-          child: Padding(
-            padding: const EdgeInsets.all(40),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 24,
-                      backgroundColor: _purple,
-                      child: Text(
-                        'OG',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'OnGROW Support Console',
+    final colors = _colors;
+    final parentTheme = Theme.of(context);
+    return Theme(
+      data: parentTheme.copyWith(
+        textTheme: parentTheme.textTheme.apply(
+          bodyColor: colors.text,
+          displayColor: colors.text,
+        ),
+        iconTheme: parentTheme.iconTheme.copyWith(color: colors.text),
+      ),
+      child: Scaffold(
+        backgroundColor: colors.canvas,
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Padding(
+              padding: const EdgeInsets.all(40),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundColor: OnGrowConsoleColors.action,
+                        child: Text(
+                          'OG',
                           style: TextStyle(
-                            fontSize: 25,
+                            color: OnGrowConsoleColors.onAction,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        Text(
-                          'Sicherer Zugriff für autorisierte Supportmitarbeiter',
-                        ),
-                      ],
+                      ),
+                      SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'OnGROW Support Console',
+                            style: TextStyle(
+                              fontSize: 25,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Text(
+                            'Sicherer Zugriff für autorisierte Supportmitarbeiter',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 32),
+                  Card(
+                    elevation: 0,
+                    color: colors.surface,
+                    surfaceTintColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(color: colors.outline),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 32),
-                Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    side: const BorderSide(color: Color(0xFFE5DDF0)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: isRegistered
+                          ? _registered(state)
+                          : _registration(state),
+                    ),
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: isRegistered
-                        ? _registered(state)
-                        : _registration(state),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -184,8 +198,10 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
         const SizedBox(height: 24),
         FilledButton.icon(
           style: FilledButton.styleFrom(
-            backgroundColor: _purple,
-            foregroundColor: Colors.white,
+            backgroundColor: OnGrowConsoleColors.action,
+            foregroundColor: OnGrowConsoleColors.onAction,
+            disabledBackgroundColor: _colors.inset,
+            disabledForegroundColor: _colors.muted,
             minimumSize: const Size.fromHeight(48),
           ),
           onPressed: state == 'failed' ? null : _openControl,
@@ -194,7 +210,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
         ),
         if (state == 'registering') ...[
           const SizedBox(height: 18),
-          const LinearProgressIndicator(color: _purple),
+          LinearProgressIndicator(color: _colors.link),
           const SizedBox(height: 8),
           const Text('Registrierung wird kryptografisch bestätigt …'),
         ],
@@ -213,16 +229,23 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: _lime,
+                color: OnGrowConsoleColors.success,
                 borderRadius: BorderRadius.circular(99),
               ),
               child: const Row(
                 children: [
-                  Icon(Icons.verified_user_outlined, size: 18),
+                  Icon(
+                    Icons.verified_user_outlined,
+                    size: 18,
+                    color: OnGrowConsoleColors.onSuccess,
+                  ),
                   SizedBox(width: 6),
                   Text(
                     'Registriert',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: OnGrowConsoleColors.onSuccess,
+                    ),
                   ),
                 ],
               ),
@@ -244,10 +267,15 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
         ),
         if (busy) ...[
           const SizedBox(height: 24),
-          const LinearProgressIndicator(color: _purple),
+          LinearProgressIndicator(color: _colors.link),
         ],
         const SizedBox(height: 24),
         OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: _colors.link,
+            backgroundColor: _colors.surface,
+            side: BorderSide(color: _colors.outline),
+          ),
           onPressed: _openControl,
           icon: const Icon(Icons.devices_outlined),
           label: const Text('Geräte in Support Control öffnen'),
@@ -262,7 +290,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F0F8),
+        color: _colors.inset,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -280,12 +308,17 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
                   value.isEmpty
                       ? 'Wird erzeugt …'
                       : '${value.substring(0, value.length > 18 ? 18 : value.length)}…',
-                  style: const TextStyle(fontFamily: 'monospace'),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: _colors.muted,
+                  ),
                 ),
               ],
             ),
           ),
           IconButton(
+            color: _colors.text,
+            disabledColor: _colors.muted,
             tooltip: '$label kopieren',
             onPressed: value.isEmpty ? null : () => _copy(key, label),
             icon: const Icon(Icons.copy_outlined),
@@ -301,7 +334,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
       padding: const EdgeInsets.only(top: 18),
       child: Text(
         'Die Aktion konnte nicht abgeschlossen werden ($code).',
-        style: const TextStyle(color: Colors.redAccent),
+        style: TextStyle(color: _colors.error),
       ),
     );
   }
