@@ -162,10 +162,14 @@ void runMainApp(bool startService) async {
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     // Restore the location of the main window before window hide or show.
     await restoreWindowPosition(WindowType.Main);
-    // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
+    // Regular RustDesk links may run without a main window. The Support Console
+    // stays visible so registration and launch state remain observable.
     final handledByUniLinks = await initUniLinks();
+    final handledByArgs = handleUriLink(cmdArgs: kBootArgs);
+    final isSupportConsole =
+        bind.mainGetAppNameSync() == 'OnGROW Support Console';
     debugPrint("handled by uni links: $handledByUniLinks");
-    if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
+    if (!isSupportConsole && (handledByUniLinks || handledByArgs)) {
       windowManager.hide();
     } else {
       windowManager.show();

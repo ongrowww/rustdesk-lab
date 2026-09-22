@@ -2268,9 +2268,11 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
       ((cmdArgs != null && cmdArgs.isNotEmpty) ? cmdArgs.first : null);
   if (rawUri != null &&
       bind.mainGetAppNameSync() == 'OnGROW Support Console') {
-    bind.mainHandleOngrowOperatorUriSync(uri: rawUri);
-    windowOnTop(null);
-    return true;
+    final handled = bind.mainHandleOngrowOperatorUriSync(uri: rawUri);
+    if (handled) {
+      windowOnTop(null);
+    }
+    return handled;
   }
   List<String>? args;
   if (cmdArgs != null && cmdArgs.isNotEmpty) {
