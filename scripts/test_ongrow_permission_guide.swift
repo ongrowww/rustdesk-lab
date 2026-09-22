@@ -5,9 +5,17 @@ struct PermissionGuideTests {
     static func main() {
         precondition(OnGrowPermissionPane(rawValue: "fullDiskAccess") == nil)
         precondition(OnGrowPermissionPane(rawValue: "network") == nil)
+        let expectedLinks: [OnGrowPermissionPane: String] = [
+            .screenRecording: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            .accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            .inputMonitoring: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        ]
         for pane in OnGrowPermissionPane.allCases {
             precondition(pane.settingsURL?.scheme == "x-apple.systempreferences")
-            precondition(pane.settingsURL?.query == pane.anchor)
+            // Older Foundation treats this non-hierarchical Settings URL as
+            // opaque and returns nil for .query. Verify the complete URL that
+            // NSWorkspace receives instead, including the exact privacy pane.
+            precondition(pane.settingsURL?.absoluteString == expectedLinks[pane])
         }
         let size = NSSize(width: 400, height: 378)
         let displays = [NSRect(x: 0, y: 30, width: 1440, height: 850),
