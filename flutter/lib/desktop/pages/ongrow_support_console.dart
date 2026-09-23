@@ -9,7 +9,9 @@ import 'package:ongrow_support_ui/ongrow_console_colors.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class OnGrowSupportConsole extends StatefulWidget {
-  const OnGrowSupportConsole({super.key});
+  const OnGrowSupportConsole({super.key, this.statusProvider});
+
+  final String Function()? statusProvider;
 
   @override
   State<OnGrowSupportConsole> createState() => _OnGrowSupportConsoleState();
@@ -40,7 +42,9 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
 
   Future<void> _refresh() async {
     try {
-      final decoded = jsonDecode(bind.mainGetOngrowOperatorStatusSync());
+      final decoded = jsonDecode(
+        widget.statusProvider?.call() ?? bind.mainGetOngrowOperatorStatusSync(),
+      );
       if (decoded is Map<String, dynamic> && mounted) {
         setState(() => _status = decoded);
       }
@@ -57,10 +61,17 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
               deviceId.isNotEmpty &&
               handle.isNotEmpty) {
             _opening = true;
-            await rustDeskWinManager.newRemoteDesktop(
-              deviceId,
-              operatorLaunchHandle: handle,
-            );
+            try {
+              await rustDeskWinManager.newRemoteDesktop(
+                deviceId,
+                operatorLaunchHandle: handle,
+              );
+            } catch (_) {
+              bind.operatorCancelLaunchSync(handle: handle);
+              rethrow;
+            } finally {
+              _opening = false;
+            }
           }
         }
       }
@@ -189,7 +200,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Öffne Support Control, lege diese Konsole an und kopiere beide öffentlichen Schlüssel in das Formular. Private Schlüssel verlassen den macOS-Schlüsselbund nicht.',
+          'Öffne Support Control, lege diese Konsole an und kopiere beide öffentlichen Schlüssel in das Formular. Private Schlüssel bleiben in der Schlüsselablage dieses Benutzerkontos.',
         ),
         const SizedBox(height: 24),
         _keyRow('Signaturschlüssel', 'signing_public_key'),
@@ -220,7 +231,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
   }
 
   Widget _registered(String state) {
-    final busy = state == 'redeeming' || state == 'opening';
+    final busy = state == 'redeeming' || state == 'ready' || state == 'opening';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

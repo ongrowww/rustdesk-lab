@@ -3900,6 +3900,9 @@ class FFI {
       () async {
         if (message is EventToUI_Event) {
           if (message.field0 == "close") {
+            if (operatorLaunchHandle != null) {
+              bind.operatorSessionFailedSync(sessionId: sessionId);
+            }
             closed = true;
             debugPrint('Exit session event loop');
             return;
@@ -3912,6 +3915,10 @@ class FFI {
             debugPrint('json.decode fail1(): $e, ${message.field0}');
           }
           if (event != null) {
+            if (operatorLaunchHandle != null &&
+                event['name'] == 'connection_ready') {
+              bind.operatorSessionReadySync(sessionId: sessionId);
+            }
             await cb(event);
           }
         } else if (message is EventToUI_Rgba) {

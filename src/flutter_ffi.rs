@@ -183,7 +183,10 @@ pub fn operator_session_add_sync(
     let (password, launch_id, console_id) =
         match crate::ongrow_operator::consume_launch(&launch_handle, &id) {
             Ok(value) => value,
-            Err(error) => return SyncReturn(error.to_owned()),
+            Err(error) => {
+                crate::ongrow_operator::fail_start();
+                return SyncReturn(error.to_owned());
+            }
         };
     let result = session_add(
         &session_id,
@@ -201,14 +204,31 @@ pub fn operator_session_add_sync(
     );
     match result {
         Ok(_) => {
-            crate::ongrow_operator::acknowledge_async(launch_id, console_id);
+            crate::ongrow_operator::stage_ack(session_id.to_string(), launch_id, console_id);
             SyncReturn(String::new())
         }
-        Err(error) => SyncReturn(format!(
-            "Failed to add operator session with id {}, {}",
-            id, error
-        )),
+        Err(error) => {
+            crate::ongrow_operator::fail_start();
+            SyncReturn(format!(
+                "Failed to add operator session with id {}, {}",
+                id, error
+            ))
+        }
     }
+}
+
+pub fn operator_session_ready_sync(session_id: SessionID) -> SyncReturn<bool> {
+    SyncReturn(crate::ongrow_operator::confirm_session_start(
+        &session_id.to_string(),
+    ))
+}
+
+pub fn operator_session_failed_sync(session_id: SessionID) {
+    crate::ongrow_operator::fail_session_start(&session_id.to_string());
+}
+
+pub fn operator_cancel_launch_sync(handle: String) {
+    crate::ongrow_operator::cancel_launch(&handle);
 }
 
 pub fn session_start(

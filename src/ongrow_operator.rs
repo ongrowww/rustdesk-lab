@@ -19,6 +19,8 @@ use zeroize::Zeroize;
 const APP_NAME: &str = "OnGROW Support Console";
 const KEYCHAIN_SERVICE: &str = "de.ongrow.supportconsole.credentials";
 const KEYCHAIN_ACCOUNT: &str = "operator-v1";
+#[cfg(windows)]
+mod windows_credentials;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const PENDING_LAUNCH_TTL: Duration = Duration::from_secs(60);
 const TICKET_BYTES: usize = 32;
@@ -49,6 +51,13 @@ struct StoredCredentials {
     signing_secret_key: String,
     encryption_public_key: String,
     encryption_secret_key: String,
+}
+
+impl Drop for StoredCredentials {
+    fn drop(&mut self) {
+        self.signing_secret_key.zeroize();
+        self.encryption_secret_key.zeroize();
+    }
 }
 
 struct Credentials {
@@ -121,6 +130,7 @@ lazy_static::lazy_static! {
     static ref STATUS: Mutex<OperatorStatus> = Mutex::new(OperatorStatus::default());
     static ref PENDING: Mutex<HashMap<String, PendingLaunch>> = Mutex::new(HashMap::new());
     static ref READY_HANDLE: Mutex<String> = Mutex::new(String::new());
+    static ref PENDING_ACK: Mutex<HashMap<String, (String, String)>> = Mutex::new(HashMap::new());
 }
 
 pub fn status() -> String {
@@ -241,6 +251,43 @@ pub fn acknowledge_async(launch_id: String, console_id: String) {
             set_error("acknowledgement_failed");
         }
     });
+}
+
+pub fn stage_ack(session_id: String, launch_id: String, console_id: String) {
+    PENDING_ACK
+        .lock()
+        .unwrap()
+        .insert(session_id, (launch_id, console_id));
+}
+
+pub fn confirm_session_start(session_id: &str) -> bool {
+    let Some((launch_id, console_id)) = take_ack(session_id) else {
+        return false;
+    };
+    acknowledge_async(launch_id, console_id);
+    true
+}
+
+fn take_ack(session_id: &str) -> Option<(String, String)> {
+    PENDING_ACK.lock().unwrap().remove(session_id)
+}
+
+pub fn fail_session_start(session_id: &str) {
+    if PENDING_ACK.lock().unwrap().remove(session_id).is_some() {
+        set_error("session_start_failed");
+    }
+}
+
+pub fn fail_start() {
+    set_error("session_start_failed");
+}
+
+pub fn cancel_launch(handle: &str) {
+    let removed = PENDING.lock().unwrap().remove(handle).is_some();
+    let opening = STATUS.lock().unwrap().state == "opening";
+    if removed || opening {
+        set_error("session_start_failed");
+    }
 }
 
 fn public_status(credentials: &Credentials) -> OperatorStatus {
@@ -438,7 +485,19 @@ fn credentials() -> Result<Credentials, &'static str> {
             Err(_) => Err("keychain_unavailable"),
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _guard = windows_credentials::lock_initialization()?;
+        match windows_credentials::read()? {
+            Some(mut raw) => {
+                let parsed = decode_credentials(&raw);
+                raw.zeroize();
+                parsed
+            }
+            None => create_credentials(),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     Err("platform_not_supported")
 }
 
@@ -457,7 +516,7 @@ fn create_credentials() -> Result<Credentials, &'static str> {
 }
 
 fn decode_credentials(raw: &[u8]) -> Result<Credentials, &'static str> {
-    let stored: StoredCredentials =
+    let mut stored: StoredCredentials =
         serde_json::from_slice(raw).map_err(|_| "invalid_keychain_record")?;
     if stored.version != 1
         || (!stored.console_id.is_empty() && !valid_opaque(&stored.console_id, 16, 64))
@@ -471,7 +530,7 @@ fn decode_credentials(raw: &[u8]) -> Result<Credentials, &'static str> {
     let mut encryption_secret_key =
         fixed_key::<{ box_::SECRETKEYBYTES }>(&stored.encryption_secret_key)?;
     let credentials = Credentials {
-        console_id: stored.console_id,
+        console_id: std::mem::take(&mut stored.console_id),
         signing_public_key: sign::PublicKey(signing_public_key),
         signing_secret_key: sign::SecretKey(signing_secret_key),
         encryption_public_key: box_::PublicKey(encryption_public_key),
@@ -499,7 +558,9 @@ fn store_credentials(credentials: &Credentials) -> Result<(), &'static str> {
         &raw,
     )
     .map_err(|_| "keychain_unavailable");
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let result = windows_credentials::write(&mut raw);
+    #[cfg(not(any(target_os = "macos", windows)))]
     let result = Err("platform_not_supported");
     raw.zeroize();
     result
@@ -673,5 +734,53 @@ mod tests {
         assert_eq!(parse_envelope(&envelope), Ok("abcdefghijklmnop".to_owned()));
         envelope.push(0);
         assert_eq!(parse_envelope(&envelope), Err("invalid_secret_envelope"));
+    }
+
+    #[test]
+    fn pending_ack_is_one_shot() {
+        let session_id = "operator-one-shot-test".to_owned();
+        stage_ack(
+            session_id.clone(),
+            "launch".to_owned(),
+            "console".to_owned(),
+        );
+        assert_eq!(
+            take_ack(&session_id),
+            Some(("launch".to_owned(), "console".to_owned()))
+        );
+        assert_eq!(take_ack(&session_id), None);
+    }
+
+    #[test]
+    fn native_launch_handle_is_consumed_once() {
+        let handle = "operator-one-shot-handle";
+        let device_id = "test-device";
+        PENDING.lock().unwrap().insert(
+            handle.to_owned(),
+            PendingLaunch {
+                device_id: device_id.to_owned(),
+                password: "test-sentinel-password".to_owned(),
+                launch_id: "test-launch".to_owned(),
+                console_id: "test-console".to_owned(),
+                created_at: Instant::now(),
+            },
+        );
+        assert!(consume_launch(handle, device_id).is_ok());
+        assert!(matches!(
+            consume_launch(handle, device_id),
+            Err("launch_expired")
+        ));
+    }
+
+    #[test]
+    fn corrupt_credential_record_does_not_generate_new_identity() {
+        assert_eq!(
+            decode_credentials(b"not-json").err(),
+            Some("invalid_keychain_record")
+        );
+        assert_eq!(
+            decode_credentials(br#"{"version":2}"#).err(),
+            Some("invalid_keychain_record")
+        );
     }
 }
