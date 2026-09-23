@@ -19,6 +19,18 @@ class OnGrowUiPreviewApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF6F3FD),
         useMaterial3: true,
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: ongrowViolet,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      themeMode: Uri.base.queryParameters['theme'] == 'dark'
+          ? ThemeMode.dark
+          : Uri.base.queryParameters['theme'] == 'light'
+              ? ThemeMode.light
+              : ThemeMode.system,
       home: const _PreviewScreen(),
     );
   }

@@ -183,6 +183,24 @@ class MainFlutterWindow: NSWindow {
         channel.setMethodCallHandler({
             (call, result) -> Void in
                 switch call.method {
+                case "showOnGrowPermissionGuide":
+                    guard let args = call.arguments as? [String: Any],
+                          let name = args["pane"] as? String,
+                          let pane = OnGrowPermissionPane(rawValue: name),
+                          let status = args["status"] as? [String: Bool] else {
+                        result(FlutterError(code: "invalid_permission", message: "Unknown permission pane", details: nil))
+                        return
+                    }
+                    result(OnGrowPermissionGuide.shared.show(
+                        pane: pane, status: status, owner: registrar.view?.window))
+                case "updateOnGrowPermissionGuide":
+                    if let status = call.arguments as? [String: Bool] {
+                        OnGrowPermissionGuide.shared.update(status: status)
+                    }
+                    result(nil)
+                case "closeOnGrowPermissionGuide":
+                    OnGrowPermissionGuide.shared.dismiss(restoreFocus: false)
+                    result(nil)
                 case "setWindowTheme":
                     let arg = call.arguments as! [String: Any]
                     let themeName = arg["themeName"] as? String
