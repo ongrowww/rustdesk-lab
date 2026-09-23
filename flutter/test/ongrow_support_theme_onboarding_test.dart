@@ -13,19 +13,34 @@ const fresh = OnGrowSupportSnapshot(
 OnGrowSupportActions actions({
   Future<void> Function()? screen,
   Future<void> Function()? accessibility,
+  Future<void> Function()? microphone,
   Future<OnGrowSupportSnapshot> Function()? refresh,
   Future<void> Function()? close,
 }) => OnGrowSupportActions(
   copySupportId: () async {}, requestSupport: () async {}, openSettings: () {},
   requestScreenRecording: screen ?? () async {},
   requestAccessibility: accessibility ?? () async {},
-  requestInputMonitoring: () async {}, requestMicrophone: () async {},
+  requestInputMonitoring: () async {}, requestMicrophone: microphone ?? () async {},
   openNetworkSettings: () async {}, refresh: refresh ?? () async => fresh,
   enableUnattended: () async {}, revokeUnattended: () async {},
   closePermissionGuide: close,
 );
 
 void main() {
+  testWidgets('relaunch at microphone requests it once without a next button', (tester) async {
+    var requests = 0;
+    final snapshot = fresh.copyWith(canRecordScreen: true,
+        isProcessTrusted: true, canMonitorInput: true);
+    await tester.pumpWidget(MaterialApp(home: OnGrowPermissionHelpDialog(
+      initialSnapshot: snapshot, initialStep: 4, autoStart: true,
+      actions: actions(microphone: () async { requests++; },
+          refresh: () async => snapshot),
+    )));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
+    expect(requests, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
   void largeScreen(WidgetTester tester) {
     tester.view.physicalSize = const Size(1400, 1100);
     tester.view.devicePixelRatio = 1;

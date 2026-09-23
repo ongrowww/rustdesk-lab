@@ -2,6 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_hbb/common/ongrow_permission_onboarding.dart';
 
 void main() {
+  test('microphone is requested after the three remote-control permissions', () {
+    expect(OnGrowPermissionOnboarding.nextStep(screen: true, accessibility: true,
+        input: true, microphoneHandled: false), 4);
+    expect(OnGrowPermissionOnboarding.nextStep(screen: true, accessibility: true,
+        input: true, microphoneHandled: true), isNull);
+  });
   int? step(String saved, bool screen, bool accessibility, bool input) =>
       OnGrowPermissionOnboarding.startupStep(
         saved: saved, screen: screen, accessibility: accessibility, input: input);

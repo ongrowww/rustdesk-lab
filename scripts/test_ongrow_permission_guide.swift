@@ -8,7 +8,8 @@ struct PermissionGuideTests {
         let expectedLinks: [OnGrowPermissionPane: String] = [
             .screenRecording: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
             .accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            .inputMonitoring: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+            .inputMonitoring: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            .microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         ]
         for pane in OnGrowPermissionPane.allCases {
             precondition(pane.settingsURL?.scheme == "x-apple.systempreferences")
@@ -17,6 +18,11 @@ struct PermissionGuideTests {
             // NSWorkspace receives instead, including the exact privacy pane.
             precondition(pane.settingsURL?.absoluteString == expectedLinks[pane])
         }
+        precondition(OnGrowPermissionGuide.nextPane(after: .screenRecording, status: [:]) == .screenRecording)
+        precondition(OnGrowPermissionGuide.nextPane(after: .screenRecording, status: ["screenRecording": true]) == .accessibility)
+        precondition(OnGrowPermissionGuide.nextPane(after: .accessibility, status: ["screenRecording": true, "accessibility": true]) == .inputMonitoring)
+        precondition(OnGrowPermissionGuide.nextPane(after: .inputMonitoring, status: ["screenRecording": true, "accessibility": true, "inputMonitoring": true]) == .microphone)
+        precondition(OnGrowPermissionGuide.nextPane(after: .microphone, status: ["screenRecording": true, "accessibility": true, "inputMonitoring": true, "microphone": true]) == nil)
         let size = NSSize(width: 400, height: 378)
         let displays = [NSRect(x: 0, y: 30, width: 1440, height: 850),
                         NSRect(x: -1920, y: 0, width: 1920, height: 1080),
@@ -36,7 +42,7 @@ struct PermissionGuideTests {
         if CommandLine.arguments.contains("--preview") {
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
-            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 350),
+            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 200),
                                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "OnGROW Permission Guide · UI Test"
             window.appearance = NSAppearance(named: CommandLine.arguments.contains("--dark") ? .darkAqua : .aqua)

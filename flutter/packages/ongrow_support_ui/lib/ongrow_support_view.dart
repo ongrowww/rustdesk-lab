@@ -1435,6 +1435,8 @@ class _OnGrowPermissionHelpDialogState
           widget.actions.requestScreenRecording,
           widget.actions.requestAccessibility,
           widget.actions.requestInputMonitoring,
+          widget.actions.openNetworkSettings,
+          widget.actions.requestMicrophone,
         ];
         if (_expandedStep >= 0 && _expandedStep < actions.length) {
           unawaited(_run(actions[_expandedStep]));
@@ -1466,7 +1468,8 @@ class _OnGrowPermissionHelpDialogState
               _stepComplete(refreshed, _expandedStep)) {
             _expandedStep = !refreshed.canRecordScreen ? 0
                 : !refreshed.isProcessTrusted ? 1
-                : !refreshed.canMonitorInput ? 2 : 3;
+                : !refreshed.canMonitorInput ? 2
+                : !refreshed.canRecordAudio ? 4 : 3;
           }
         });
       }

@@ -273,7 +273,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
         canMonitorInput: bind.mainIsCanInputMonitoring(prompt: false),
       );
 
-  void _maybeStartPermissionOnboarding(OnGrowSupportSnapshot snapshot) {
+  Future<void> _maybeStartPermissionOnboarding(OnGrowSupportSnapshot snapshot) async {
     if (_onboardingStartupChecked) return;
     _onboardingStartupChecked = true;
     final saved = bind.mainGetLocalOption(
@@ -284,6 +284,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       screen: snapshot.canRecordScreen,
       accessibility: snapshot.isProcessTrusted,
       input: snapshot.canMonitorInput,
+      microphoneHandled: await osxCanRecordAudio() != PermissionAuthorizeType.undetermined,
     );
     if (step == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -314,6 +315,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
       screen: snapshot.canRecordScreen,
       accessibility: snapshot.isProcessTrusted,
       input: snapshot.canMonitorInput,
+      microphoneHandled: await osxCanRecordAudio() != PermissionAuthorizeType.undetermined,
     ) == null) {
       await bind.mainSetLocalOption(
         key: OnGrowPermissionOnboarding.optionKey,
@@ -486,7 +488,9 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
 
   Future<void> _requestMicrophone() async {
     if (isMacOS) {
-      await OnGrowPermissionGuide.close();
+      if (await OnGrowPermissionGuide.show('microphone', _guideStatus(_snapshot))) {
+        return;
+      }
       await osxRequestAudio();
     }
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -512,6 +516,7 @@ class _OnGrowSupportHomeState extends State<OnGrowSupportHome>
         'screenRecording': snapshot.canRecordScreen,
         'accessibility': snapshot.isProcessTrusted,
         'inputMonitoring': snapshot.canMonitorInput,
+        'microphone': snapshot.canRecordAudio,
       };
 
   Future<void> _openSupportEmail() async {

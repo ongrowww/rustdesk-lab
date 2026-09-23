@@ -1,16 +1,18 @@
 import Cocoa
+import AVFoundation
 
 // Native companion to the Flutter permission checklist. Dragging supplies the
 // installed app URL only; System Settings remains responsible for authorization.
 // Status comes from the existing Rust checks, never from a successful drop.
 enum OnGrowPermissionPane: String, CaseIterable {
-    case screenRecording, accessibility, inputMonitoring
+    case screenRecording, accessibility, inputMonitoring, microphone
 
     var title: String {
         switch self {
         case .screenRecording: return "Bildschirmaufnahme"
         case .accessibility: return "Bedienungshilfen"
         case .inputMonitoring: return "Eingabeüberwachung"
+        case .microphone: return "Mikrofon"
         }
     }
 
@@ -19,6 +21,7 @@ enum OnGrowPermissionPane: String, CaseIterable {
         case .screenRecording: return "Privacy_ScreenCapture"
         case .accessibility: return "Privacy_Accessibility"
         case .inputMonitoring: return "Privacy_ListenEvent"
+        case .microphone: return "Privacy_Microphone"
         }
     }
 
@@ -35,9 +38,9 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
     private var timer: Timer?
     private weak var owner: NSWindow?
     private var statusLabel: NSTextField?
-    private var nextButton: NSButton?
-    private var keyboardEntry: NSButton?
+    private var keyboardEntry: NSView?
     private var lastGranted: Bool?
+    private var grantedAt: Date?
     private var openedAt = Date()
     private var dragging = false
 
@@ -54,10 +57,10 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         openedAt = Date()
 
         let panel = OnGrowPermissionPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 350),
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 200),
             styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel],
             backing: .buffered, defer: false)
-        panel.title = "\(pane.title) einrichten"
+        panel.title = pane.title
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.appearance = owner?.appearance
@@ -76,6 +79,19 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
             self?.followSettings()
         }
         if let timer = timer { RunLoop.main.add(timer, forMode: .common) }
+        if pane == .microphone && AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            NSApp.activate(ignoringOtherApps: true)
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+                DispatchQueue.main.async {
+                    guard let self = self, self.pane == .microphone else { return }
+                    if granted { self.dismiss(restoreFocus: true) }
+                    else {
+                        self.statusLabel?.stringValue = "Nicht erlaubt · Fernzugriff funktioniert auch ohne Mikrofon."
+                        self.statusLabel?.isHidden = false
+                    }
+                }
+            }
+        }
         return true
     }
 
@@ -85,11 +101,16 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         let granted = status[pane.rawValue] == true
         guard lastGranted != granted else { return }
         lastGranted = granted
+        grantedAt = granted ? Date() : nil
         statusLabel?.stringValue = granted
-            ? "✓ Erlaubt · Die App hat die Freigabe erkannt."
-            : "Noch nicht erkannt. Falls macOS es verlangt, beende und öffne die App erneut."
+            ? "✓ Erlaubt"
+            : ""
+        statusLabel?.isHidden = !granted
+        if pane == .microphone && !granted && AVCaptureDevice.authorizationStatus(for: .audio) != .notDetermined {
+            statusLabel?.stringValue = "Nicht erlaubt · Fernzugriff funktioniert auch ohne Mikrofon."
+            statusLabel?.isHidden = false
+        }
         statusLabel?.textColor = granted ? .systemGreen : .secondaryLabelColor
-        nextButton?.title = granted ? "Weiter" : "Zurück zur App"
         if let label = statusLabel {
             NSAccessibility.post(element: label, notification: .valueChanged)
         }
@@ -103,8 +124,8 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         panel = nil
         pane = nil
         lastGranted = nil
+        grantedAt = nil
         statusLabel = nil
-        nextButton = nil
         keyboardEntry = nil
         dragging = false
         if restoreFocus, let owner = owner {
@@ -140,29 +161,27 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -18)
         ])
-        let title = label("Ziehe das App-Icon in die Liste", bold: true)
-        let instructions = label("Ziehe OnGROW Support Desk in die Liste für \(pane.title). Ist die App schon eingetragen, schalte sie dort ein. Bestätige anschließend die Rückfrage von macOS.")
+        let instructions = label(pane == .microphone
+            ? "Erlaube das Mikrofon für Gespräche im Support. Du kannst auch ablehnen."
+            : "Ziehe das App-Icon in die Liste „\(pane.title)“ und schalte es ein.", bold: true)
         let drag = OnGrowAppDragView(appURL: Bundle.main.bundleURL)
+        drag.onActivate = { [weak self, weak drag] in
+            self?.showAlternative(pane: pane, window: drag?.window)
+        }
         drag.onDrag = { [weak self] active in
             self?.dragging = active
             self?.panel?.ignoresMouseEvents = active
         }
-        let state = label("Noch nicht erkannt. Falls macOS es verlangt, beende und öffne die App erneut.")
+        let state = label("")
+        state.isHidden = true
         state.textColor = .secondaryLabelColor
         statusLabel = state
-        let alternative = OnGrowGuideButton(title: "Ohne Ziehen einrichten", target: self, action: #selector(showAlternative))
-        alternative.bezelStyle = .rounded
-        let next = OnGrowGuideButton(title: "Zurück zur App", target: self, action: #selector(continueSetup))
-        next.bezelStyle = .rounded
-        nextButton = next
-        keyboardEntry = alternative
-        root.nextKeyView = alternative
-        alternative.nextKeyView = next
-        next.nextKeyView = alternative
-        for view in [title, instructions, drag, state, alternative, next] {
+        keyboardEntry = pane == .microphone ? nil : drag
+        root.nextKeyView = keyboardEntry
+        drag.nextKeyView = drag
+        let views: [NSView] = pane == .microphone ? [instructions, state] : [instructions, drag, state]
+        for view in views {
             stack.addArrangedSubview(view)
-        }
-        for view in [title, instructions, drag, state] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         drag.heightAnchor.constraint(equalToConstant: 66).isActive = true
@@ -171,15 +190,14 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         return root
     }
 
-    @objc private func showAlternative() {
-        guard let pane = pane, let url = pane.settingsURL else { return }
+    private func showAlternative(pane: OnGrowPermissionPane, window: NSWindow?) {
+        guard let url = pane.settingsURL, let window = window else { return }
         let alert = NSAlert()
         alert.messageText = "App ohne Ziehen hinzufügen"
         alert.informativeText = "Wähle in der Liste für \(pane.title) das Pluszeichen. Drücke im Dateidialog ⇧⌘G und füge den App-Pfad mit ⌘V ein. Wähle die App aus und aktiviere ihren Schalter. Ist sie bereits eingetragen, aktiviere nur den Schalter."
         alert.addButton(withTitle: "App-Pfad kopieren")
         alert.addButton(withTitle: "Abbrechen")
-        guard let panel = panel else { return }
-        alert.beginSheetModal(for: panel) { response in
+        alert.beginSheetModal(for: window) { response in
             if response == .alertFirstButtonReturn {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(Bundle.main.bundlePath, forType: .string)
@@ -188,14 +206,12 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc private func continueSetup() {
+    private func continueSetup() {
         guard let current = pane, status[current.rawValue] == true else {
             dismiss(restoreFocus: true)
             return
         }
-        // Advancing is explicit so Settings never changes while a user is
-        // interacting with a system authentication or relaunch dialog.
-        if let next = OnGrowPermissionPane.allCases.first(where: { status[$0.rawValue] != true }) {
+        if let next = Self.nextPane(after: current, status: status) {
             let previousOwner = owner
             if !show(pane: next, status: status, owner: previousOwner) {
                 dismiss(restoreFocus: true)
@@ -203,6 +219,11 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         } else {
             dismiss(restoreFocus: true)
         }
+    }
+
+    static func nextPane(after current: OnGrowPermissionPane, status: [String: Bool]) -> OnGrowPermissionPane? {
+        guard status[current.rawValue] == true else { return current }
+        return OnGrowPermissionPane.allCases.first { status[$0.rawValue] != true }
     }
 
     private func followSettings() {
@@ -216,6 +237,13 @@ final class OnGrowPermissionGuide: NSObject, NSWindowDelegate {
         let foreground = NSWorkspace.shared.frontmostApplication?.processIdentifier
         guard foreground == settings.processIdentifier || foreground == ProcessInfo.processInfo.processIdentifier else {
             panel.orderOut(nil)
+            return
+        }
+        // Never navigate during a drag or our keyboard-help sheet. Only a real
+        // permission check can advance the guide, never a completed drop.
+        if let pane = pane, status[pane.rawValue] == true,
+           let grantedAt = grantedAt, Date().timeIntervalSince(grantedAt) >= 0.8 {
+            continueSetup()
             return
         }
         // Window geometry only. No AX trust, screenshots or synthetic clicks.
@@ -269,24 +297,31 @@ private final class OnGrowPermissionPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
-private final class OnGrowGuideButton: NSButton {
-    // Keep the alternative usable even when macOS's optional keyboard
-    // navigation setting is off. Native button focus and activation remain.
-    override var acceptsFirstResponder: Bool { true }
-    override var canBecomeKeyView: Bool { true }
-}
-
 private final class OnGrowAppDragView: NSView, NSDraggingSource {
     private let appURL: URL
     private var start: NSPoint?
     var onDrag: ((Bool) -> Void)?
+    var onActivate: (() -> Void)?
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10).fill() }
+    override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func resignFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 49 { onActivate?() }
+        else { super.keyDown(with: event) }
+    }
+    override func accessibilityPerformPress() -> Bool { onActivate?(); return true }
 
     init(appURL: URL) {
         self.appURL = appURL
         super.init(frame: .zero)
         setAccessibilityElement(true)
-        setAccessibilityRole(.image)
-        setAccessibilityLabel("OnGROW Support Desk. Ziehbares App-Icon. Alternativ: Ohne Ziehen einrichten.")
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("OnGROW Support Desk hinzufügen")
+        setAccessibilityHelp("In die Berechtigungsliste ziehen oder mit Eingabetaste die Tastaturanleitung öffnen.")
+        focusRingType = .exterior
     }
     required init?(coder: NSCoder) { return nil }
 
@@ -301,10 +336,19 @@ private final class OnGrowAppDragView: NSView, NSDraggingSource {
             .font: NSFont.boldSystemFont(ofSize: 13), .foregroundColor: NSColor.labelColor])
         ("In die Berechtigungsliste ziehen" as NSString).draw(at: NSPoint(x: 72, y: 16), withAttributes: [
             .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor])
+        if window?.firstResponder === self {
+            NSGraphicsContext.saveGraphicsState()
+            NSFocusRingPlacement.only.set()
+            background.fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
     override func mouseDown(with event: NSEvent) { start = event.locationInWindow }
-    override func mouseUp(with event: NSEvent) { start = nil }
+    override func mouseUp(with event: NSEvent) {
+        if start != nil { onActivate?() }
+        start = nil
+    }
     override func mouseDragged(with event: NSEvent) {
         guard let start = start,
               hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) > 4 else { return }
