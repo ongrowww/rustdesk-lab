@@ -3790,7 +3790,6 @@ class FFI {
     // If tabWindowId != null, this session is a "tab -> window" one.
     // Else this session is a new one.
     if (isNewPeer) {
-      // ignore: unused_local_variable
       final addRes = operatorLaunchHandle == null
           ? bind.sessionAddSync(
               sessionId: sessionId,
@@ -3811,6 +3810,10 @@ class FFI {
               id: id,
               launchHandle: operatorLaunchHandle,
             );
+      if (operatorLaunchHandle != null && addRes.isNotEmpty) {
+        closed = true;
+        throw StateError('session_start_failed');
+      }
     } else if (display != null) {
       if (displays == null) {
         debugPrint(
@@ -3900,6 +3903,9 @@ class FFI {
       () async {
         if (message is EventToUI_Event) {
           if (message.field0 == "close") {
+            if (operatorLaunchHandle != null) {
+              bind.operatorSessionFailedSync(sessionId: sessionId);
+            }
             closed = true;
             debugPrint('Exit session event loop');
             return;

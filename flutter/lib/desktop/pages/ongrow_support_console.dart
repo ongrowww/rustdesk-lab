@@ -9,7 +9,9 @@ import 'package:ongrow_support_ui/ongrow_console_colors.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class OnGrowSupportConsole extends StatefulWidget {
-  const OnGrowSupportConsole({super.key});
+  const OnGrowSupportConsole({super.key, this.statusProvider});
+
+  final String Function()? statusProvider;
 
   @override
   State<OnGrowSupportConsole> createState() => _OnGrowSupportConsoleState();
@@ -19,6 +21,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
   OnGrowConsoleColors get _colors =>
       OnGrowConsoleColors.forBrightness(Theme.of(context).brightness);
   Timer? _timer;
+  final _scrollController = ScrollController();
   Map<String, dynamic> _status = const {'state': 'loading'};
   bool _opening = false;
 
@@ -35,12 +38,15 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
   @override
   void dispose() {
     _timer?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _refresh() async {
     try {
-      final decoded = jsonDecode(bind.mainGetOngrowOperatorStatusSync());
+      final decoded = jsonDecode(
+        widget.statusProvider?.call() ?? bind.mainGetOngrowOperatorStatusSync(),
+      );
       if (decoded is Map<String, dynamic> && mounted) {
         setState(() => _status = decoded);
       }
@@ -57,10 +63,17 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
               deviceId.isNotEmpty &&
               handle.isNotEmpty) {
             _opening = true;
-            await rustDeskWinManager.newRemoteDesktop(
-              deviceId,
-              operatorLaunchHandle: handle,
-            );
+            try {
+              await rustDeskWinManager.newRemoteDesktop(
+                deviceId,
+                operatorLaunchHandle: handle,
+              );
+            } catch (_) {
+              bind.operatorCancelLaunchSync(handle: handle);
+              rethrow;
+            } finally {
+              _opening = false;
+            }
           }
         }
       }
@@ -114,63 +127,84 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
       ),
       child: Scaffold(
         backgroundColor: colors.canvas,
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Padding(
-              padding: const EdgeInsets.all(40),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor: OnGrowConsoleColors.action,
-                        child: Text(
-                          'OG',
-                          style: TextStyle(
-                            color: OnGrowConsoleColors.onAction,
-                            fontWeight: FontWeight.w800,
-                          ),
+        body: LayoutBuilder(
+          builder: (context, constraints) => Scrollbar(
+            key: const ValueKey('ongrow-console-scrollbar'),
+            controller: _scrollController,
+            thumbVisibility: true,
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(
+                context,
+              ).copyWith(scrollbars: false),
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: Padding(
+                        padding: const EdgeInsets.all(40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 24,
+                                  backgroundColor: OnGrowConsoleColors.action,
+                                  child: Text(
+                                    'OG',
+                                    style: TextStyle(
+                                      color: OnGrowConsoleColors.onAction,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'OnGROW Support Console',
+                                        style: TextStyle(
+                                          fontSize: 25,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Sicherer Zugriff für autorisierte Supportmitarbeiter',
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 32),
+                            Card(
+                              elevation: 0,
+                              color: colors.surface,
+                              surfaceTintColor: Colors.transparent,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                side: BorderSide(color: colors.outline),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(28),
+                                child: isRegistered
+                                    ? _registered(state)
+                                    : _registration(state),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'OnGROW Support Console',
-                            style: TextStyle(
-                              fontSize: 25,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          Text(
-                            'Sicherer Zugriff für autorisierte Supportmitarbeiter',
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 32),
-                  Card(
-                    elevation: 0,
-                    color: colors.surface,
-                    surfaceTintColor: Colors.transparent,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                      side: BorderSide(color: colors.outline),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(28),
-                      child: isRegistered
-                          ? _registered(state)
-                          : _registration(state),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -189,7 +223,7 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Öffne Support Control, lege diese Konsole an und kopiere beide öffentlichen Schlüssel in das Formular. Private Schlüssel verlassen den macOS-Schlüsselbund nicht.',
+          'Öffne Support Control, lege diese Konsole an und kopiere beide öffentlichen Schlüssel in das Formular. Private Schlüssel bleiben in der Schlüsselablage dieses Benutzerkontos.',
         ),
         const SizedBox(height: 24),
         _keyRow('Signaturschlüssel', 'signing_public_key'),
@@ -220,37 +254,39 @@ class _OnGrowSupportConsoleState extends State<OnGrowSupportConsole> {
   }
 
   Widget _registered(String state) {
-    final busy = state == 'redeeming' || state == 'opening';
+    final busy = state == 'redeeming' || state == 'ready' || state == 'opening';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: OnGrowConsoleColors.success,
-                borderRadius: BorderRadius.circular(99),
-              ),
-              child: const Row(
-                children: [
-                  Icon(
-                    Icons.verified_user_outlined,
-                    size: 18,
-                    color: OnGrowConsoleColors.onSuccess,
-                  ),
-                  SizedBox(width: 6),
-                  Text(
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: OnGrowConsoleColors.success,
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.verified_user_outlined,
+                  size: 18,
+                  color: OnGrowConsoleColors.onSuccess,
+                ),
+                SizedBox(width: 6),
+                Flexible(
+                  child: Text(
                     'Registriert',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: OnGrowConsoleColors.onSuccess,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
         const SizedBox(height: 20),
         Text(

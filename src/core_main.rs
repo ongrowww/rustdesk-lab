@@ -119,6 +119,16 @@ pub fn core_main() -> Option<Vec<String>> {
     if _is_flutter_invoke_new_connection {
         return core_main_invoke_new_connection(std::env::args());
     }
+    #[cfg(windows)]
+    if crate::get_app_name() == "OnGROW Support Console"
+        && (_is_elevate
+            || _is_run_as_system
+            || _is_quick_support
+            || args.iter().any(|arg| arg.starts_with("--")))
+    {
+        // This product uses a per-user installer and never hosts an incoming service.
+        return None;
+    }
     let click_setup = cfg!(windows) && args.is_empty() && crate::common::is_setup(&arg_exe);
     if click_setup && !config::is_disable_installation() {
         args.push("--install".to_owned());
@@ -145,7 +155,8 @@ pub fn core_main() -> Option<Vec<String>> {
     }
     #[cfg(windows)]
     {
-        _is_quick_support |= !crate::platform::is_installed()
+        _is_quick_support |= crate::get_app_name() != "OnGROW Support Console"
+            && !crate::platform::is_installed()
             && args.is_empty()
             && (is_quick_support_exe(&arg_exe)
                 || config::LocalConfig::get_option("pre-elevate-service") == "Y"

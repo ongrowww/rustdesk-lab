@@ -183,7 +183,10 @@ pub fn operator_session_add_sync(
     let (password, launch_id, console_id) =
         match crate::ongrow_operator::consume_launch(&launch_handle, &id) {
             Ok(value) => value,
-            Err(error) => return SyncReturn(error.to_owned()),
+            Err(error) => {
+                crate::ongrow_operator::fail_start();
+                return SyncReturn(error.to_owned());
+            }
         };
     let result = session_add(
         &session_id,
@@ -201,14 +204,22 @@ pub fn operator_session_add_sync(
     );
     match result {
         Ok(_) => {
-            crate::ongrow_operator::acknowledge_async(launch_id, console_id);
+            crate::ongrow_operator::stage_ack(session_id.to_string(), launch_id, console_id);
             SyncReturn(String::new())
         }
-        Err(error) => SyncReturn(format!(
-            "Failed to add operator session with id {}, {}",
-            id, error
-        )),
+        Err(_) => {
+            crate::ongrow_operator::fail_start();
+            SyncReturn("session_start_failed".to_owned())
+        }
     }
+}
+
+pub fn operator_session_failed_sync(session_id: SessionID) {
+    crate::ongrow_operator::fail_session_start(&session_id.to_string());
+}
+
+pub fn operator_cancel_launch_sync(handle: String) {
+    crate::ongrow_operator::cancel_launch(&handle);
 }
 
 pub fn session_start(
@@ -297,6 +308,7 @@ pub fn will_session_close_close_session(session_id: SessionID) -> SyncReturn<boo
 }
 
 pub fn session_close(session_id: SessionID) {
+    crate::ongrow_operator::fail_session_start(&session_id.to_string());
     if let Some(session) = sessions::remove_session_by_session_id(&session_id) {
         // `release_remote_keys` is not required for mobile platforms in common cases.
         // But we still call it to make the code more stable.

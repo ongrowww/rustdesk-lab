@@ -2116,6 +2116,8 @@ fn enforce_ongrow_operator_role() {
         let mut settings = config::HARD_SETTINGS.write().unwrap();
         settings.insert("conn-type".to_owned(), "outgoing".to_owned());
         settings.insert("disable-tcp-listen".to_owned(), "Y".to_owned());
+        #[cfg(windows)]
+        settings.insert("disable-installation".to_owned(), "Y".to_owned());
     }
 }
 

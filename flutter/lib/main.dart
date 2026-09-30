@@ -185,6 +185,10 @@ void runMainApp(bool startService) async {
       await WidgetsBinding.instance.endOfFrame;
       if (await windowManager.isVisible()) {
         // Non-sensitive readiness signal for the packaged-app launch test.
+        if (isWindows) {
+          await const MethodChannel('org.rustdesk.rustdesk/host')
+              .invokeMethod<void>('ongrowConsoleUiReady');
+        }
         debugPrint('ONGROW_CONSOLE_UI_READY');
       }
     }

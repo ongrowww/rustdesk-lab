@@ -532,6 +532,110 @@ impl VideoRenderer {
     }
 }
 
+#[cfg(test)]
+mod ongrow_operator_session_tests {
+    use super::*;
+    use crate::ongrow_operator::{stage_ack, TEST_ACKS, TEST_STATE_LOCK};
+
+    fn handler(session_id: SessionID) -> FlutterHandler {
+        let handler = FlutterHandler::default();
+        handler
+            .session_handlers
+            .write()
+            .unwrap()
+            .insert(session_id, SessionHandler::default());
+        handler
+    }
+
+    #[test]
+    fn transport_ready_does_not_ack_authenticated_session_acks_exactly_once() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
+        TEST_ACKS.lock().unwrap().clear();
+        let session_id = SessionID::default();
+        let handler = handler(session_id);
+        stage_ack(
+            session_id.to_string(),
+            "authenticated-launch".to_owned(),
+            "console".to_owned(),
+        );
+        let unrelated_session = SessionID::from_bytes([1; 16]);
+        stage_ack(
+            unrelated_session.to_string(),
+            "unrelated-launch".to_owned(),
+            "console".to_owned(),
+        );
+        // Transport readiness alone must leave the staged ACK untouched.
+        handler.set_connection_type(true, true, "TCP");
+        assert!(TEST_ACKS.lock().unwrap().is_empty());
+        handler.on_connected(ConnType::DEFAULT_CONN);
+        handler.on_connected(ConnType::DEFAULT_CONN);
+        assert_eq!(
+            *TEST_ACKS.lock().unwrap(),
+            vec![("authenticated-launch".to_owned(), "console".to_owned())]
+        );
+        crate::ongrow_operator::fail_session_start(&unrelated_session.to_string());
+    }
+
+    #[test]
+    fn pre_auth_failure_and_close_clear_ack_and_allow_subsequent_launch() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
+        TEST_ACKS.lock().unwrap().clear();
+        let session_id = SessionID::default();
+        let handler = handler(session_id);
+        stage_ack(
+            session_id.to_string(),
+            "rejected-launch".to_owned(),
+            "console".to_owned(),
+        );
+        handler.msgbox("error", "Error", "Login rejected", "", false);
+        handler.on_connected(ConnType::DEFAULT_CONN);
+        assert!(TEST_ACKS.lock().unwrap().is_empty());
+        stage_ack(
+            session_id.to_string(),
+            "cancelled-launch".to_owned(),
+            "console".to_owned(),
+        );
+        handler.close_event_stream(session_id);
+        handler.on_connected(ConnType::DEFAULT_CONN);
+        assert!(TEST_ACKS.lock().unwrap().is_empty());
+        stage_ack(
+            session_id.to_string(),
+            "next-launch".to_owned(),
+            "console".to_owned(),
+        );
+        handler.on_connected(ConnType::DEFAULT_CONN);
+        assert_eq!(
+            *TEST_ACKS.lock().unwrap(),
+            vec![("next-launch".to_owned(), "console".to_owned())]
+        );
+    }
+
+    #[test]
+    fn password_and_2fa_login_response_errors_clear_ack_and_busy_state() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
+        TEST_ACKS.lock().unwrap().clear();
+        let session_id = SessionID::default();
+        let handler = handler(session_id);
+        let session = Session::<FlutterHandler> {
+            ui_handler: handler.clone(),
+            ..Default::default()
+        };
+        for login_error in [LOGIN_MSG_PASSWORD_EMPTY, LOGIN_MSG_PASSWORD_WRONG, REQUIRE_2FA] {
+            stage_ack(
+                session_id.to_string(),
+                "rejected-ticket".to_owned(),
+                "console".to_owned(),
+            );
+            assert!(session.handle_login_error(login_error));
+            // Manual login after rejection must not ACK the failed ticket.
+            handler.on_connected(ConnType::DEFAULT_CONN);
+            assert!(TEST_ACKS.lock().unwrap().is_empty());
+            assert!(crate::ongrow_operator::test_begin_launch());
+        }
+        crate::ongrow_operator::fail_start();
+    }
+}
+
 impl SessionHandler {
     pub fn on_waiting_for_image_dialog_show(&self) {
         self.renderer.reset_all_display_render_type();
@@ -595,6 +699,7 @@ impl FlutterHandler {
     }
 
     pub(crate) fn close_event_stream(&self, session_id: SessionID) {
+        crate::ongrow_operator::fail_session_start(&session_id.to_string());
         // to-do: Make sure the following logic is correct.
         // No need to remove the display handler, because it will be removed when the connection is closed.
         if let Some(session) = self.session_handlers.write().unwrap().get_mut(&session_id) {
@@ -989,9 +1094,23 @@ impl InvokeUiSession for FlutterHandler {
         );
     }
 
-    fn on_connected(&self, _conn_type: ConnType) {}
+    fn on_connected(&self, _conn_type: ConnType) {
+        // Called by handle_peer_info only after a successful LoginResponse.
+        for session_id in self.session_handlers.read().unwrap().keys() {
+            crate::ongrow_operator::confirm_session_authenticated(&session_id.to_string());
+        }
+    }
+
+    fn on_login_error(&self) {
+        for session_id in self.session_handlers.read().unwrap().keys() {
+            crate::ongrow_operator::fail_session_start(&session_id.to_string());
+        }
+    }
 
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool) {
+        if msgtype.contains("error") {
+            self.on_login_error();
+        }
         let has_retry = if retry { "true" } else { "" };
         self.push_event(
             "msgbox",
@@ -1405,6 +1524,7 @@ pub fn session_start_(
         }
     }
     if !is_found {
+        crate::ongrow_operator::fail_session_start(&session_id.to_string());
         bail!(
             "No session with peer id {}, session id: {}",
             id,
@@ -1428,6 +1548,7 @@ pub fn session_start_(
         }
         Ok(())
     } else {
+        crate::ongrow_operator::fail_session_start(&session_id.to_string());
         bail!("No session with peer id {}", id)
     }
 }
