@@ -316,6 +316,8 @@ jobs:
 
       - name: Run OnGROW device attestation tests
         run: |
+          python3 scripts/test_ongrow_ci_isolation.py
+          cargo test --locked --lib --features flutter ongrow_ci
           cargo test --locked --lib --features flutter \
             ui_interface::tests
           cargo test --locked --lib --features flutter \
@@ -413,6 +415,8 @@ jobs:
           codesign --verify --deep --strict --verbose=4 "$RUSTDESK_APP_PATH"
 
       - name: Smoke test app launch
+        env:
+          ONGROW_CI_SMOKE_TEST: "1"
         shell: bash
         run: |
           RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Console.app"

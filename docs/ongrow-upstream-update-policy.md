@@ -39,6 +39,27 @@ Zusätzlich muss das Cross-Repository-Kompatibilitätsgate des Server-Forks mit 
 festgehaltenen Client-, Server- und beiden `hbb_common`-Revisionen erfolgreich sein.
 Ein Produkt-Merge erfolgt erst nach diesem Gate und den plattformspezifischen Tests.
 
+## Isolation von Buildtests
+
+App-Starttests dürfen keine Geräte im produktiven Inventar registrieren.
+`GITHUB_ACTIONS=true` sperrt deshalb zur Laufzeit die Rendezvous-Anmeldung und
+die OnGROW-Control-Endpunkte. Außerhalb von GitHub muss ein App-Smoke-Test
+`ONGROW_CI_SMOKE_TEST=1` an den gestarteten Prozess übergeben. Der Console-
+Smoke-Helper setzt dies selbst; die macOS-Workflows setzen es ausdrücklich.
+Die lokale IPC und die UI können damit geprüft werden, ohne eine Testidentität
+auf den echten Servern anzulegen.
+
+Die Sperre ist eine Laufzeitprüfung. CI darf sie nicht als kompiliertes
+Produktprofil oder als Einstellung in ausgelieferte Pakete übernehmen.
+Ein normal gestarteter Kundenclient ohne diese Umgebungsvariablen verwendet
+weiterhin die eingebetteten OnGROW-Endpunkte. Reale Verbindungs- und Freigabetests
+werden separat auf den dafür freigegebenen Testgeräten durchgeführt.
+
+`python3 scripts/test_ongrow_ci_isolation.py` prüft die echten Rust-
+Entscheidungen in getrennten Prozessen und die nativen Netzwerkgrenzen.
+Der schnelle Workflow `ongrow-ci-isolation-check.yml` prüft Änderungen vor
+dem Merge; die Produkt-Builds führen die Tests ebenfalls aus.
+
 ## Vertrauensanker und Rotation
 
 Rendezvous-Hostname, öffentlicher hbbs-Trust-Anchor und HTTPS-Control-Plane-URL sind

@@ -273,6 +273,8 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          python scripts/test_ongrow_ci_isolation.py
+          cargo test --locked --lib --features flutter ongrow_ci
           cargo test --locked --lib --features flutter ongrow_control
           cargo test --locked --lib --features flutter ui_interface::tests
           cargo test --locked --lib --features flutter uninstall_candidates
