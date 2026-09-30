@@ -1201,6 +1201,9 @@ fn sign_with_device_key(payload: &[u8]) -> Result<Vec<u8>, SyncResult> {
 }
 
 fn control_plane_url() -> Option<Url> {
+    if crate::ongrow_ci::networking_disabled() {
+        return None;
+    }
     validate_base_url(option_env!("ONGROW_CONTROL_PLANE_URL").unwrap_or(""))
 }
 

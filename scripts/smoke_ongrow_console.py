@@ -23,7 +23,7 @@ def smoke(command, timeout=30, settle=2):
             command,
             stdout=output,
             stderr=subprocess.STDOUT,
-            env=dict(os.environ, NSUnbufferedIO="YES", RUST_BACKTRACE="1"),
+            env=dict(os.environ, NSUnbufferedIO="YES", RUST_BACKTRACE="1", ONGROW_CI_SMOKE_TEST="1"),
         )
         try:
             deadline = time.monotonic() + timeout

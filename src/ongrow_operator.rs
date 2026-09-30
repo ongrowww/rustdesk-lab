@@ -590,6 +590,9 @@ fn endpoint(path: &str) -> Result<String, &'static str> {
 }
 
 fn validated_base_url() -> Result<String, &'static str> {
+    if crate::ongrow_ci::networking_disabled() {
+        return Err("control_plane_not_configured");
+    }
     let raw = option_env!("ONGROW_CONTROL_PLANE_URL").unwrap_or("");
     let parsed = Url::parse(raw).map_err(|_| "control_plane_not_configured")?;
     if parsed.scheme() != "https"

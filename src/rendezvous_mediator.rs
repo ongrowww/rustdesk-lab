@@ -114,6 +114,9 @@ impl RendezvousMediator {
     }
 
     pub async fn start_all() {
+        if crate::ongrow_ci::networking_disabled() {
+            return;
+        }
         crate::test_nat_type();
         if config::is_outgoing_only() {
             loop {

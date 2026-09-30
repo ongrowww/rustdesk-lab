@@ -11,6 +11,9 @@ class ConsoleSmokeTests(unittest.TestCase):
     def test_visible_ui_passes(self):
         self.run_app("import time; print('ONGROW_CONSOLE_UI_READY'); time.sleep(5)")
 
+    def test_child_is_isolated_even_outside_github_actions(self):
+        self.run_app("import os, time; assert os.environ.get('ONGROW_CI_SMOKE_TEST') == '1'; print('ONGROW_CONSOLE_UI_READY'); time.sleep(5)")
+
     def test_living_process_without_ui_fails(self):
         with self.assertRaisesRegex(RuntimeError, "rendered, visible"):
             self.run_app("import time; time.sleep(5)")
