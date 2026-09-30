@@ -158,7 +158,12 @@ jobs:
         shell: bash
         run: |
           pushd flutter
-          flutter analyze --no-pub --no-fatal-infos lib/desktop/pages/ongrow_support_console.dart
+          flutter analyze --no-pub --no-fatal-infos \
+            lib/desktop/pages/ongrow_support_console.dart \
+            lib/utils/multi_window_manager.dart \
+            lib/desktop/pages/remote_tab_page.dart \
+            lib/models/model.dart \
+            lib/main.dart
           flutter test --no-pub test/ongrow_support_console_test.dart
           popd
 
