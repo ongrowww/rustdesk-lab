@@ -47,7 +47,20 @@ bool FlutterWindow::OnCreate() {
     &flutter::StandardMethodCodec::GetInstance());
 
   channel.SetMethodCallHandler(
-    [](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
+    [this](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
+      if (call.method_name() == "ongrowConsoleUiReady") {
+        // Dart signals this only after initialization, endOfFrame and visibility.
+        // Require a native rasterized frame too, not just an opened HWND.
+        flutter_controller_->engine()->SetNextFrameCallback([this]() {
+          if (::IsWindowVisible(GetHandle())) {
+            ::SetPropW(GetHandle(), L"ONGROW_CONSOLE_UI_READY",
+                       reinterpret_cast<HANDLE>(1));
+          }
+        });
+        flutter_controller_->ForceRedraw();
+        result->Success();
+        return;
+      }
       if (call.method_name() == "bumpMouse") {
         auto arguments = call.arguments();
 
@@ -96,6 +109,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  ::RemovePropW(GetHandle(), L"ONGROW_CONSOLE_UI_READY");
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

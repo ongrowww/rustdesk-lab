@@ -28,6 +28,10 @@ void main() {
       ),
     );
     await tester.pump();
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    });
   }
 
   testWidgets('registration state exposes public-key instructions', (

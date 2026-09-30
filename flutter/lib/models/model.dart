@@ -3790,7 +3790,6 @@ class FFI {
     // If tabWindowId != null, this session is a "tab -> window" one.
     // Else this session is a new one.
     if (isNewPeer) {
-      // ignore: unused_local_variable
       final addRes = operatorLaunchHandle == null
           ? bind.sessionAddSync(
               sessionId: sessionId,
@@ -3811,6 +3810,10 @@ class FFI {
               id: id,
               launchHandle: operatorLaunchHandle,
             );
+      if (operatorLaunchHandle != null && addRes.isNotEmpty) {
+        closed = true;
+        throw StateError('session_start_failed');
+      }
     } else if (display != null) {
       if (displays == null) {
         debugPrint(
@@ -3915,10 +3918,6 @@ class FFI {
             debugPrint('json.decode fail1(): $e, ${message.field0}');
           }
           if (event != null) {
-            if (operatorLaunchHandle != null &&
-                event['name'] == 'connection_ready') {
-              bind.operatorSessionReadySync(sessionId: sessionId);
-            }
             await cb(event);
           }
         } else if (message is EventToUI_Rgba) {

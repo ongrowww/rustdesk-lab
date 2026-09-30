@@ -55,8 +55,15 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
 
+fn target_name() -> String {
+    #[cfg(test)]
+    return format!("{}-{}", TARGET, std::process::id());
+    #[cfg(not(test))]
+    TARGET.to_owned()
+}
+
 pub(super) fn read() -> Result<Option<Vec<u8>>, &'static str> {
-    let target = wide(TARGET);
+    let target = wide(&target_name());
     let mut credential = ptr::null_mut();
     // Credential Manager scopes generic credentials to the current Windows user.
     if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) } == 0 {
@@ -92,7 +99,7 @@ pub(super) fn write(raw: &mut [u8]) -> Result<(), &'static str> {
     if raw.is_empty() || raw.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
         return Err("credential_record_too_large");
     }
-    let mut target = wide(TARGET);
+    let mut target = wide(&target_name());
     let mut username = wide(super::KEYCHAIN_ACCOUNT);
     let mut record: CREDENTIALW = unsafe { std::mem::zeroed() };
     record.Type = CRED_TYPE_GENERIC;
@@ -116,7 +123,8 @@ mod tests {
 
     #[test]
     fn isolated_credential_roundtrip_update_and_parallel_initialization() {
-        let target = wide(TARGET);
+        let _test_guard = super::super::TEST_STATE_LOCK.lock().unwrap();
+        let target = wide(&target_name());
         unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
         assert_eq!(read().unwrap(), None);
         let workers: Vec<_> = (0..8)
@@ -140,6 +148,26 @@ mod tests {
             write(&mut vec![0; CRED_MAX_CREDENTIAL_BLOB_SIZE as usize + 1]),
             Err("credential_record_too_large")
         );
+        // Exercise the real persisted JSON decoder, including the longest valid ID.
+        let credentials = super::super::tests::sample_credentials();
+        let mut raw = super::super::encode_credentials(&credentials).unwrap();
+        assert!(raw.len() <= CRED_MAX_CREDENTIAL_BLOB_SIZE as usize);
+        write(&mut raw).unwrap();
+        let mut persisted = read().unwrap().unwrap();
+        let decoded = super::super::decode_credentials(&persisted).unwrap();
+        persisted.zeroize();
+        raw.zeroize();
+        assert_eq!(decoded.console_id, credentials.console_id);
+        assert_eq!(decoded.signing_public_key, credentials.signing_public_key);
+        assert!(decoded.signing_secret_key == credentials.signing_secret_key);
+        assert_eq!(decoded.encryption_public_key, credentials.encryption_public_key);
+        assert!(decoded.encryption_secret_key == credentials.encryption_secret_key);
+        write(&mut b"invalid-json".to_vec()).unwrap();
+        assert_eq!(
+            super::super::decode_credentials(&read().unwrap().unwrap()).err(),
+            Some("invalid_keychain_record")
+        );
+        assert_eq!(read().unwrap(), Some(b"invalid-json".to_vec()));
         unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
     }
 }

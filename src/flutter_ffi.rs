@@ -207,20 +207,11 @@ pub fn operator_session_add_sync(
             crate::ongrow_operator::stage_ack(session_id.to_string(), launch_id, console_id);
             SyncReturn(String::new())
         }
-        Err(error) => {
+        Err(_) => {
             crate::ongrow_operator::fail_start();
-            SyncReturn(format!(
-                "Failed to add operator session with id {}, {}",
-                id, error
-            ))
+            SyncReturn("session_start_failed".to_owned())
         }
     }
-}
-
-pub fn operator_session_ready_sync(session_id: SessionID) -> SyncReturn<bool> {
-    SyncReturn(crate::ongrow_operator::confirm_session_start(
-        &session_id.to_string(),
-    ))
 }
 
 pub fn operator_session_failed_sync(session_id: SessionID) {
@@ -317,6 +308,7 @@ pub fn will_session_close_close_session(session_id: SessionID) -> SyncReturn<boo
 }
 
 pub fn session_close(session_id: SessionID) {
+    crate::ongrow_operator::fail_session_start(&session_id.to_string());
     if let Some(session) = sessions::remove_session_by_session_id(&session_id) {
         // `release_remote_keys` is not required for mobile platforms in common cases.
         // But we still call it to make the code more stable.

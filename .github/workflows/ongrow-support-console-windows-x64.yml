@@ -2,6 +2,28 @@ name: OnGROW Support Console - Windows x64 Lab
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ongrow-support-console-windows-x64.yml'
+      - 'src/ongrow_operator.rs'
+      - 'src/ongrow_operator/**'
+      - 'src/ongrow_ci.rs'
+      - 'src/flutter.rs'
+      - 'src/flutter_ffi.rs'
+      - 'src/ui_session_interface.rs'
+      - 'src/common.rs'
+      - 'src/core_main.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'flutter/lib/main.dart'
+      - 'flutter/lib/models/model.dart'
+      - 'flutter/lib/utils/multi_window_manager.dart'
+      - 'flutter/lib/desktop/pages/ongrow_support_console.dart'
+      - 'flutter/lib/desktop/pages/remote_tab_page.dart'
+      - 'flutter/test/ongrow_support_console_test.dart'
+      - 'flutter/windows/**'
+      - 'scripts/*ongrow*console*'
+      - 'scripts/test_ongrow_ci_isolation.py'
 
 permissions:
   contents: read
@@ -11,6 +33,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  SOURCE_SHA: "${{ github.event.pull_request.head.sha || github.sha }}"
   VERSION: "1.4.9"
   BRIDGE_RUST_VERSION: "1.75"
   WINDOWS_RUST_VERSION: "1.75"
@@ -29,13 +52,14 @@ env:
 
 jobs:
   generate-bridge:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - name: Checkout source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           submodules: recursive
           persist-credentials: false
 
@@ -61,7 +85,7 @@ jobs:
       - name: Verify source revision
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
 
       - name: Install prerequisites
@@ -141,7 +165,7 @@ jobs:
       - name: Upload bridge artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ongrow-windows-bridge-1.4.9
+          name: ongrow-windows-bridge-1.4.9-${{ env.SOURCE_SHA }}
           retention-days: 1
           if-no-files-found: error
           path: |
@@ -165,7 +189,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           submodules: recursive
           persist-credentials: false
 
@@ -179,6 +203,7 @@ jobs:
           python scripts/test_ongrow_windows_product.py
           python scripts/test_ongrow_windows_console_product.py
           pwsh -NoProfile -File scripts/check_ongrow_windows_console_powershell.ps1
+          pwsh -NoProfile -File scripts/test_ongrow_windows_console_install.ps1
           git -C libs/hbb_common apply --unidiff-zero "$env:GITHUB_WORKSPACE/.github/patches/ongrow-support-desk-hbb-common.patch"
           python scripts/apply_ongrow_product_profile.py `
             --role support-console `
@@ -213,7 +238,7 @@ jobs:
       - name: Verify source revision and runner architecture
         shell: pwsh
         run: |
-          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw "Source revision mismatch" }
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw "Source revision mismatch" }
           if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") { throw "Expected AMD64 runner" }
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches.Groups[1].Value
           if ($version -ne $env:VERSION) { throw "Version mismatch" }
@@ -263,7 +288,7 @@ jobs:
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ongrow-windows-bridge-1.4.9
+          name: ongrow-windows-bridge-1.4.9-${{ env.SOURCE_SHA }}
           path: ./
 
       - name: Setup vcpkg with GitHub Actions binary cache
@@ -285,8 +310,11 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          python scripts/test_ongrow_ci_isolation.py
+          cargo test --locked --lib --features flutter ongrow_ci
           cargo test --locked --lib --features flutter ongrow_control
           cargo test --locked --lib --features flutter ongrow_operator
+          cargo test --locked --lib --features flutter ongrow_operator_session_tests
           cargo test --locked --lib --features flutter ui_interface::tests
           cargo test --locked --lib --features flutter uninstall_candidates
           cargo test --locked --lib --features flutter service_commands
@@ -299,9 +327,20 @@ jobs:
 
       - name: Smoke-test initialized Console UI
         shell: pwsh
+        env:
+          ONGROW_CI_SMOKE_TEST: "1"
         run: |
           $exe = (Resolve-Path "flutter/build/windows/x64/runner/Release/OnGROW Support Console.exe").Path
-          Add-Type -AssemblyName UIAutomationClient
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class OnGrowConsoleUi {
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+              public static extern IntPtr GetProp(IntPtr window, string name);
+              [DllImport("user32.dll")]
+              public static extern bool IsWindowVisible(IntPtr window);
+          }
+          '@
           $process = Start-Process -FilePath $exe -PassThru
           try {
             $found = $false
@@ -310,15 +349,16 @@ jobs:
               $process.Refresh()
               if ($process.HasExited) { throw "Console exited before UI initialized" }
               if ($process.MainWindowHandle -eq [IntPtr]::Zero) { continue }
-              $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-              $condition = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::NameProperty,
-                'OnGROW Support Console')
-              $found = $null -ne $root.FindFirst(
-                [System.Windows.Automation.TreeScope]::Descendants, $condition)
+              $found = [OnGrowConsoleUi]::IsWindowVisible($process.MainWindowHandle) -and
+                [OnGrowConsoleUi]::GetProp($process.MainWindowHandle, 'ONGROW_CONSOLE_UI_READY') -ne [IntPtr]::Zero
               if ($found) { break }
             }
             if (-not $found) { throw "Console window opened without initialized UI" }
+            Start-Sleep -Seconds 2
+            $process.Refresh()
+            if ($process.HasExited -or -not [OnGrowConsoleUi]::IsWindowVisible($process.MainWindowHandle)) {
+              throw "Console did not remain visible after rendering"
+            }
           } finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id }
           }
@@ -385,6 +425,7 @@ jobs:
             $sha.Dispose()
           }
           if (-not (Select-String -Quiet -SimpleMatch "hbbs_key_sha256=$fingerprint" ongrow-build-provenance.txt)) { throw "Trust-anchor fingerprint mismatch" }
+          if (-not (Select-String -Quiet -SimpleMatch "source=$env:SOURCE_SHA" ongrow-build-provenance.txt)) { throw "Artifact source revision mismatch" }
 
           $artifact = Join-Path "dist" $env:ARTIFACT_NAME
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null

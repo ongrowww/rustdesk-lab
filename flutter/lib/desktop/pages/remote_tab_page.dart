@@ -430,6 +430,14 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
     if (call.method == kWindowEventNewRemoteDesktop) {
       final args = jsonDecode(call.arguments);
       final id = args['id'];
+      final operatorHandle = args['operator_launch_handle'];
+      if (operatorHandle is String &&
+          tabController.state.value.tabs.any((tab) => tab.key == id)) {
+        // Focusing an existing tab did not consume or authenticate this launch.
+        bind.operatorCancelLaunchSync(handle: operatorHandle);
+        tabController.jumpToByKey(id);
+        return;
+      }
       final switchUuid = args['switch_uuid'];
       final sessionId = args['session_id'];
       final tabWindowId = args['tab_window_id'];

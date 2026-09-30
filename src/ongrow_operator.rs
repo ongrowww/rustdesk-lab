@@ -244,6 +244,12 @@ pub fn consume_launch(
 }
 
 pub fn acknowledge_async(launch_id: String, console_id: String) {
+    #[cfg(test)]
+    {
+        TEST_ACKS.lock().unwrap().push((launch_id, console_id));
+        return;
+    }
+    #[cfg(not(test))]
     std::thread::spawn(move || {
         if acknowledge(&launch_id, &console_id).is_ok() {
             set_idle();
@@ -260,7 +266,8 @@ pub fn stage_ack(session_id: String, launch_id: String, console_id: String) {
         .insert(session_id, (launch_id, console_id));
 }
 
-pub fn confirm_session_start(session_id: &str) -> bool {
+// Only the native authenticated-session callback may confirm a launch.
+pub(crate) fn confirm_session_authenticated(session_id: &str) -> bool {
     let Some((launch_id, console_id)) = take_ack(session_id) else {
         return false;
     };
@@ -542,15 +549,7 @@ fn decode_credentials(raw: &[u8]) -> Result<Credentials, &'static str> {
 }
 
 fn store_credentials(credentials: &Credentials) -> Result<(), &'static str> {
-    let stored = StoredCredentials {
-        version: 1,
-        console_id: credentials.console_id.clone(),
-        signing_public_key: encode(credentials.signing_public_key.as_ref()),
-        signing_secret_key: encode(credentials.signing_secret_key.as_ref()),
-        encryption_public_key: encode(credentials.encryption_public_key.as_ref()),
-        encryption_secret_key: encode(credentials.encryption_secret_key.as_ref()),
-    };
-    let mut raw = serde_json::to_vec(&stored).map_err(|_| "keychain_serialization_failed")?;
+    let mut raw = encode_credentials(credentials)?;
     #[cfg(target_os = "macos")]
     let result = security_framework::passwords::set_generic_password(
         KEYCHAIN_SERVICE,
@@ -564,6 +563,18 @@ fn store_credentials(credentials: &Credentials) -> Result<(), &'static str> {
     let result = Err("platform_not_supported");
     raw.zeroize();
     result
+}
+
+fn encode_credentials(credentials: &Credentials) -> Result<Vec<u8>, &'static str> {
+    let stored = StoredCredentials {
+        version: 1,
+        console_id: credentials.console_id.clone(),
+        signing_public_key: encode(credentials.signing_public_key.as_ref()),
+        signing_secret_key: encode(credentials.signing_secret_key.as_ref()),
+        encryption_public_key: encode(credentials.encryption_public_key.as_ref()),
+        encryption_secret_key: encode(credentials.encryption_secret_key.as_ref()),
+    };
+    serde_json::to_vec(&stored).map_err(|_| "keychain_serialization_failed")
 }
 
 fn fixed_key<const N: usize>(encoded: &str) -> Result<[u8; N], &'static str> {
@@ -715,11 +726,49 @@ fn set_idle() {
 }
 
 #[cfg(test)]
+lazy_static::lazy_static! {
+    pub(crate) static ref TEST_STATE_LOCK: Mutex<()> = Mutex::new(());
+    pub(crate) static ref TEST_ACKS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+}
+
+#[cfg(test)]
+pub(crate) fn test_begin_launch() -> bool {
+    begin_operation("redeeming")
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    pub(super) fn sample_credentials() -> Credentials {
+        hbb_common::sodiumoxide::init().unwrap();
+        let (signing_public_key, signing_secret_key) = sign::gen_keypair();
+        let (encryption_public_key, encryption_secret_key) = box_::gen_keypair();
+        Credentials {
+            console_id: "A".repeat(64),
+            signing_public_key,
+            signing_secret_key,
+            encryption_public_key,
+            encryption_secret_key,
+        }
+    }
+
+    #[test]
+    fn serialized_credentials_roundtrip_preserves_format_and_keys() {
+        let credentials = sample_credentials();
+        let mut raw = encode_credentials(&credentials).unwrap();
+        let decoded = decode_credentials(&raw).unwrap();
+        assert_eq!(decoded.console_id, credentials.console_id);
+        assert_eq!(decoded.signing_public_key, credentials.signing_public_key);
+        assert!(decoded.signing_secret_key == credentials.signing_secret_key);
+        assert_eq!(decoded.encryption_public_key, credentials.encryption_public_key);
+        assert!(decoded.encryption_secret_key == credentials.encryption_secret_key);
+        raw.zeroize();
+    }
+
     #[test]
     fn deep_links_reject_parameters_and_passwords() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
         assert!(!handle_uri("https://example.test/launch/value".to_owned()));
         assert!(handle_uri(
             "ongrow-support-console://launch/value?password=secret".to_owned()
@@ -741,6 +790,7 @@ mod tests {
 
     #[test]
     fn pending_ack_is_one_shot() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
         let session_id = "operator-one-shot-test".to_owned();
         stage_ack(
             session_id.clone(),
@@ -756,6 +806,7 @@ mod tests {
 
     #[test]
     fn native_launch_handle_is_consumed_once() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap();
         let handle = "operator-one-shot-handle";
         let device_id = "test-device";
         PENDING.lock().unwrap().insert(

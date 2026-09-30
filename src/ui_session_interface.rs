@@ -1690,6 +1690,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn set_displays(&self, displays: &Vec<DisplayInfo>);
     fn set_platform_additions(&self, data: &str);
     fn on_connected(&self, conn_type: ConnType);
+    fn on_login_error(&self) {}
     fn update_privacy_mode(&self);
     fn set_permission(&self, name: &str, value: bool);
     fn close_success(&self);
@@ -1785,6 +1786,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     }
 
     fn handle_login_error(&self, err: &str) -> bool {
+        self.on_login_error();
         handle_login_error(self.lc.clone(), err, self)
     }
 

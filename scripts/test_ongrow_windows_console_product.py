@@ -89,6 +89,49 @@ class WindowsConsoleProductTests(unittest.TestCase):
         self.assertIn('group: ongrow-support-desk-windows-x64-lab', desk)
         self.assertNotIn('--role support-console', desk)
 
+    def test_ack_is_native_authenticated_and_add_failure_stops_start(self) -> None:
+        ffi = self.read("src/flutter_ffi.rs")
+        native = self.read("src/flutter.rs")
+        model = self.read("flutter/lib/models/model.dart")
+        self.assertNotIn("operator_session_ready_sync", ffi)
+        self.assertNotIn("operatorSessionReadySync", model)
+        transport = native.split("fn set_connection_type(", 1)[1].split("fn set_fingerprint", 1)[0]
+        self.assertNotIn("confirm_session", transport)
+        connected = native.split("fn on_connected(", 1)[1].split("fn on_login_error", 1)[0]
+        self.assertIn("confirm_session_authenticated", connected)
+        interface = self.read("src/ui_session_interface.rs")
+        error = interface.split("fn handle_login_error(&self, err: &str)", 1)[1].split("fn set_multiple_windows_session", 1)[0]
+        self.assertLess(error.index("self.on_login_error()"), error.index("handle_login_error(self.lc"))
+        add = model.index("operatorLaunchHandle != null && addRes.isNotEmpty")
+        self.assertLess(add, model.index("stream = bind.sessionStart(", add))
+        self.assertIn("throw StateError('session_start_failed')", model[add:])
+
+    def test_windows_smoke_proves_rendered_ui_and_runtime_isolation(self) -> None:
+        workflow = self.read(".github/workflows/ongrow-support-console-windows-x64.yml")
+        self.assertIn('python scripts/test_ongrow_ci_isolation.py', workflow)
+        self.assertIn('cargo test --locked --lib --features flutter ongrow_ci', workflow)
+        smoke = workflow.split('- name: Smoke-test initialized Console UI', 1)[1].split('- name: Verify and stage', 1)[0]
+        self.assertIn('ONGROW_CI_SMOKE_TEST: "1"', smoke)
+        self.assertIn("GetProp($process.MainWindowHandle, 'ONGROW_CONSOLE_UI_READY')", smoke)
+        self.assertNotIn('UIAutomationClient', smoke)
+        runner = self.read('flutter/windows/runner/flutter_window.cpp')
+        self.assertIn('call.method_name() == "ongrowConsoleUiReady"', runner)
+        self.assertIn('SetNextFrameCallback', runner)
+        self.assertIn('ForceRedraw()', runner)
+        self.assertIn('::IsWindowVisible(GetHandle())', runner)
+        main = self.read('flutter/lib/main.dart')
+        self.assertLess(main.index('await WidgetsBinding.instance.endOfFrame'), main.index(".invokeMethod<void>('ongrowConsoleUiReady')"))
+
+    def test_pr_build_checks_out_exact_trusted_head(self) -> None:
+        workflow = self.read('.github/workflows/ongrow-support-console-windows-x64.yml')
+        self.assertIn('pull_request:', workflow)
+        self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', workflow)
+        self.assertIn('SOURCE_SHA: "${{ github.event.pull_request.head.sha || github.sha }}"', workflow)
+        self.assertEqual(workflow.count('ref: ${{ env.SOURCE_SHA }}'), 2)
+        self.assertNotIn('$GITHUB_SHA', workflow)
+        self.assertNotIn('$env:GITHUB_SHA', workflow)
+        self.assertIn('source=$env:SOURCE_SHA', workflow)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

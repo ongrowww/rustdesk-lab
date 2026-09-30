@@ -263,6 +263,9 @@ class RustDeskMultiWindowManager {
       for (final windowId in windows) {
         if (await DesktopMultiWindow.invokeMethod(
             windowId, kWindowEventActiveSession, remoteId)) {
+          if (operatorLaunchHandle != null) {
+            bind.operatorCancelLaunchSync(handle: operatorLaunchHandle);
+          }
           return MultiWindowCallResult(windowId, null);
         }
       }
