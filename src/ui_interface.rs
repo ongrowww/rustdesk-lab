@@ -118,6 +118,10 @@ pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool) 
 
 #[inline]
 pub fn update_me(_path: String) {
+    if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+        log::warn!("{}", err);
+        return;
+    }
     goto_install();
 }
 

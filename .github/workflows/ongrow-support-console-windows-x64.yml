@@ -8,6 +8,12 @@ on:
       - 'src/ongrow_operator.rs'
       - 'src/ongrow_operator/**'
       - 'src/ongrow_ci.rs'
+      - 'src/ongrow_update/**'
+      - 'src/updater.rs'
+      - 'src/platform/windows.rs'
+      - 'src/platform/macos.rs'
+      - 'src/ui_interface.rs'
+      - 'src/lib.rs'
       - 'src/flutter.rs'
       - 'src/flutter_ffi.rs'
       - 'src/ui_session_interface.rs'
@@ -35,6 +41,7 @@ concurrency:
 env:
   SOURCE_SHA: "${{ github.event.pull_request.head.sha || github.sha }}"
   VERSION: "1.4.9"
+  ONGROW_PRODUCT_ROLE: "support-console"
   BRIDGE_RUST_VERSION: "1.75"
   WINDOWS_RUST_VERSION: "1.75"
   BRIDGE_FLUTTER_VERSION: "3.22.3"
@@ -317,6 +324,8 @@ jobs:
         run: |
           python scripts/test_ongrow_ci_isolation.py
           cargo test --locked --lib --features flutter ongrow_ci
+          cargo test --locked --lib --features flutter ongrow_update
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW signed update tests failed" }
           cargo test --locked --lib --features flutter ongrow_control
           cargo test --locked --lib --features flutter ongrow_operator
           cargo test --locked --lib --features flutter ongrow_operator_session_tests
