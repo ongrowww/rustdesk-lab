@@ -9,8 +9,7 @@ pub fn networking_disabled() -> bool {
 }
 
 fn isolation_requested(smoke: Option<&str>, github_actions: Option<&str>) -> bool {
-    matches!(smoke, Some("1") | Some("true"))
-        || matches!(github_actions, Some("1") | Some("true"))
+    matches!(smoke, Some("1") | Some("true")) || matches!(github_actions, Some("1") | Some("true"))
 }
 
 #[cfg(test)]
@@ -54,7 +53,9 @@ mod tests {
             let (_, module) = module_path!().split_once("::").unwrap();
             let probe = format!("{}::environment_probe", module);
             child.args(["--ignored", "--exact", &probe]);
-            child.env_remove("ONGROW_CI_SMOKE_TEST").env_remove("GITHUB_ACTIONS");
+            child
+                .env_remove("ONGROW_CI_SMOKE_TEST")
+                .env_remove("GITHUB_ACTIONS");
             child.env("ONGROW_ISOLATION_EXPECTED", expected.to_string());
             if let Some(value) = smoke {
                 child.env("ONGROW_CI_SMOKE_TEST", value);
