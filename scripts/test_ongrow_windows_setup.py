@@ -353,6 +353,20 @@ class SetupTests(unittest.TestCase):
         self.assertLess(workflow.index("Trust-anchor fingerprint mismatch"), workflow.index("package_ongrow_windows_setup.py"))
         self.assertIn("Copy-Item LICENCE $artifact", workflow)
         self.assertIn("cargo test --locked --manifest-path libs/portable/Cargo.toml --features ongrow-support-desk", workflow)
+        # Source coverage of CI fail-closed ordering, not a claim that local
+        # fixtures resolve the complete native workspace dependency graph.
+        rust_step = workflow.split("- name: Run OnGROW Rust tests", 1)[1].split("\n      - name:", 1)[0]
+        lines = [line.strip() for line in rust_step.splitlines() if line.strip()]
+        commands = [(index, line) for index, line in enumerate(lines)
+                    if line.startswith(("cargo ", "python "))]
+        self.assertEqual(len(commands), 8)
+        self.assertEqual(commands[0][1],
+                         "cargo metadata --locked --filter-platform x86_64-pc-windows-msvc --format-version 1 | Out-Null")
+        self.assertNotIn("--no-deps", rust_step)
+        for index, command in commands:
+            self.assertRegex(lines[index + 1], r'^if \(\$LASTEXITCODE -ne 0\) \{ throw "[^"]+" \}$', command)
+            if command.startswith("cargo "):
+                self.assertIn("--locked", command)
         smoke = workflow.split("- name: Verify actual Setup payload offline", 1)[1].split("\n      - name:", 1)[0]
         self.assertIn('ONGROW_CI_SMOKE_TEST: "1"', smoke)
         self.assertIn("test_ongrow_windows_setup_payload.ps1", smoke)

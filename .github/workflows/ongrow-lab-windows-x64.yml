@@ -290,13 +290,22 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          cargo metadata --locked --filter-platform x86_64-pc-windows-msvc --format-version 1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Root Cargo.lock resolution failed" }
           python scripts/test_ongrow_ci_isolation.py
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation Python tests failed" }
           cargo test --locked --lib --features flutter ongrow_ci
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation Rust tests failed" }
           cargo test --locked --lib --features flutter ongrow_control
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW control tests failed" }
           cargo test --locked --lib --features flutter ui_interface::tests
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW UI interface tests failed" }
           cargo test --locked --lib --features flutter uninstall_candidates
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW uninstall identity tests failed" }
           cargo test --locked --lib --features flutter service_commands
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW service identity tests failed" }
           cargo test --locked --lib --features flutter broker_process_identity
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW broker identity tests failed" }
 
       - name: Build unsigned Windows x64 customer desk
         shell: pwsh
