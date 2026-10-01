@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -10,6 +11,8 @@ import os
 import re
 import runpy
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import struct
 import sys
@@ -89,6 +92,25 @@ class SetupTests(unittest.TestCase):
                 path.parent.rmdir()
 
     def test_casefold_duplicate_is_seen_on_every_filesystem(self):
+        original = self.source / "data/icudtl.dat"
+        original_bytes = original.read_bytes()
+        duplicate = self.source / "data/ICUDTL.DAT"
+        metadata = original.lstat()
+        real_lstat, real_stat = Path.lstat, Path.stat
+        inspected = []
+
+        def fixture_lstat(path, *args, **kwargs):
+            if path in (original, duplicate):
+                inspected.append(path.name)
+            if path == duplicate:
+                return metadata
+            return real_lstat(path, *args, **kwargs)
+
+        def fixture_stat(path, *args, **kwargs):
+            if path == duplicate:
+                return metadata
+            return real_stat(path, *args, **kwargs)
+
         entries = list(os.walk(self.source))
         injected = []
         for directory, directories, files in entries:
@@ -96,9 +118,15 @@ class SetupTests(unittest.TestCase):
                 self.assertIn("icudtl.dat", files)
                 files = files + ["ICUDTL.DAT"]
             injected.append((directory, directories, files))
-        with mock.patch.object(setup.os, "walk", return_value=injected):
+        # Supply regular-file metadata for the injected name even on a
+        # case-sensitive host; never create or overwrite the real ICU file.
+        with mock.patch.object(setup.os, "walk", return_value=injected), \
+                mock.patch.object(Path, "lstat", new=fixture_lstat), \
+                mock.patch.object(Path, "stat", new=fixture_stat):
             with self.assertRaisesRegex(ValueError, "Case-insensitive duplicate"):
                 self.validate()
+        self.assertEqual(inspected, ["ICUDTL.DAT", "icudtl.dat"])
+        self.assertEqual(original.read_bytes(), original_bytes)
         self.assertFalse(self.output.exists())
 
     @unittest.skipUnless(hasattr(os, "symlink"), "Symlinks unsupported")
@@ -188,12 +216,107 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_upstream_generator_executable_and_target_contract(self):
-        text = (setup.ROOT / "build.py").read_text()
-        self.assertIn("./target/release/rustdesk-portable-packer.exe", text)
         generator = setup.generator()
         with mock.patch.object(generator.subprocess, "run") as run:
             generator.build_portable(str(self.root), "", None)
             run.assert_called_once_with(["cargo", "build", "--locked", "--release"], check=True)
+
+    def test_upstream_windows_builder_moves_only_the_standalone_packer(self):
+        # Execute the actual function body without importing host-specific
+        # build.py globals or reimplementing its packaging decisions.
+        tree = ast.parse((setup.ROOT / "build.py").read_text())
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "build_flutter_windows")
+        module = ast.Module(body=[function], type_ignores=[])
+        generator_path = str(setup.ROOT / "libs/portable/generate.py")
+        fake_brotli = types.SimpleNamespace(compress=lambda data, quality: data)
+        build_dir = "flutter/build/windows/x64/runner/Release/"
+        caller_cwd = Path.cwd()
+        for existing_portable in (False, True):
+            for skip_pack in (False, True):
+                with self.subTest(existing_portable=existing_portable, skip_pack=skip_pack):
+                    root = self.root / f"builder-{existing_portable}-{skip_pack}"
+                    payload = root / build_dir
+                    payload.mkdir(parents=True)
+                    (payload / "rustdesk.exe").write_bytes(b"plain RustDesk fixture")
+                    portable = root / "libs/portable"
+                    portable.mkdir(parents=True)
+                    stale = root / "target/release/rustdesk-portable-packer.exe"
+                    stale.parent.mkdir(parents=True)
+                    stale.write_bytes(b"stale root packer")
+                    (stale.parent / "librustdesk.dll").write_bytes(b"core fixture")
+                    display = stale.parent / "deps/dylib_virtual_display.dll"
+                    display.parent.mkdir()
+                    display.write_bytes(b"display fixture")
+                    previous = root / "rustdesk_portable.exe"
+                    if existing_portable:
+                        previous.write_bytes(b"previous portable")
+                    fresh = portable / "target/release/rustdesk-portable-packer.exe"
+                    commands = []
+
+                    def compile_packer(command, check):
+                        self.assertEqual(Path.cwd(), portable)
+                        self.assertEqual(command, ["cargo", "build", "--locked", "--release"])
+                        self.assertTrue(check)
+                        self.assertTrue((portable / "data.bin").read_bytes().endswith(b"rustdesk./rustdesk.exe"))
+                        fresh.parent.mkdir(parents=True)
+                        fresh.write_bytes(b"fresh standalone packer")
+
+                    def system2(command):
+                        commands.append((Path.cwd(), command))
+                        if command.startswith("python3 ./generate.py "):
+                            argv = [generator_path, *shlex.split(command)[2:]]
+                            with mock.patch.object(sys, "argv", argv), \
+                                    mock.patch.dict(sys.modules, brotli=fake_brotli), \
+                                    mock.patch("subprocess.run", side_effect=compile_packer) as compiler:
+                                runpy.run_path(generator_path, run_name="__main__")
+                            compiler.assert_called_once()
+
+                    namespace = dict(os=os, shutil=shutil, system2=system2,
+                                     skip_cargo=False, flutter_build_dir_2=build_dir)
+                    exec(compile(module, str(setup.ROOT / "build.py"), "exec"), namespace)
+                    real_replace, real_rename = os.replace, os.rename
+                    try:
+                        os.chdir(root)
+                        with mock.patch.object(os, "replace", wraps=real_replace) as replace, \
+                                mock.patch.object(os, "rename", wraps=real_rename) as rename:
+                            namespace["build_flutter_windows"](VERSION, "flutter", skip_pack)
+                        self.assertEqual(Path.cwd(), root)
+                    finally:
+                        os.chdir(caller_cwd)
+                    self.assertEqual(Path.cwd(), caller_cwd)
+                    self.assertTrue(stale.is_file(), "The stale root packer must remain untouched")
+                    self.assertEqual(stale.read_bytes(), b"stale root packer")
+                    self.assertEqual((payload / display.name).read_bytes(), b"display fixture")
+                    expected_commands = [(root, "cargo build --locked --features flutter --lib --release"),
+                                         (root / "flutter", "flutter build windows --release")]
+                    installer = root / f"rustdesk-{VERSION}-install.exe"
+                    if skip_pack:
+                        self.assertFalse(installer.exists())
+                        self.assertFalse(fresh.exists())
+                        self.assertFalse((portable / "data.bin").exists())
+                        self.assertEqual(previous.exists(), existing_portable)
+                        if existing_portable:
+                            self.assertEqual(previous.read_bytes(), b"previous portable")
+                        replace.assert_not_called()
+                        rename.assert_not_called()
+                    else:
+                        expected_commands.extend([
+                            (portable, "pip3 install -r requirements.txt"),
+                            (portable, f"python3 ./generate.py -f ../../{build_dir} -o . -e ../../{build_dir}/rustdesk.exe")])
+                        self.assertEqual(installer.read_bytes(), b"fresh standalone packer")
+                        self.assertFalse(fresh.exists())
+                        self.assertFalse(previous.exists())
+                        source = "./libs/portable/target/release/rustdesk-portable-packer.exe"
+                        destination = "./rustdesk_portable.exe"
+                        final_move = mock.call(destination, f"./rustdesk-{VERSION}-install.exe")
+                        if existing_portable:
+                            replace.assert_called_once_with(source, destination)
+                            self.assertEqual(rename.call_args_list, [final_move])
+                        else:
+                            replace.assert_not_called()
+                            self.assertEqual(rename.call_args_list, [mock.call(source, destination), final_move])
+                    self.assertEqual(commands, expected_commands)
 
     def test_upstream_cli_preserves_build_py_executable_paths(self):
         source = self.root / "upstream with spaces"
