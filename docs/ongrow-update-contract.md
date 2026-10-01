@@ -1,7 +1,7 @@
 # Vertrag für signierte OnGROW-Updateinformationen
 
-Stand des Codes: reiner Offline-Verifier und gesperrte Upstream-Updatewege.
-Kein Autoupdater, Downloader oder Installer ist angebunden. Es gibt keinen
+Stand des Codes: Offline-Verifier, lokaler Lab-Release-Produzent und gesperrte
+Upstream-Updatewege. Kein Autoupdater, Downloader oder Installer ist angebunden. Es gibt keinen
 produktiven Release-Endpunkt und keinen eingebauten Release-Public-Key.
 Eine erfolgreich geprüfte Information ist nur ein `VerifiedCandidate`.
 
@@ -129,10 +129,111 @@ Plain RustDesk behält seine bisherigen Updatewege und URL-Validierung.
 
 Der Release-Signierschlüssel bleibt offline und getrennt von hbbs-, Geräte-
 oder Admin-Schlüsseln. Identitäten dürfen nicht wiederverwendet werden. Ein
-vertrauenswürdiger Public-Key-Bootstrap bleibt deaktiviert, bis seine getrennte,
-opake Einrichtung ausdrücklich freigegeben ist. Dieses Paket erzeugt oder
-speichert keine dauerhaften Schlüssel. Tests erzeugen synthetische Keypairs
-ausschließlich zur Laufzeit und geben deren Werte nicht aus.
+vertrauenswürdiger Client-Public-Key-Bootstrap bleibt deaktiviert, bis seine
+getrennte Einrichtung ausdrücklich freigegeben ist. Der lokale Produzent kann
+ein ausdrücklich autorisiertes Lab-Keypaar außerhalb von Git neu anlegen.
+Tests erzeugen eigene synthetische Keypairs ausschließlich zur Laufzeit,
+geben keine privaten Werte aus und verwenden niemals das dauerhafte Lab-Keypaar.
+
+## Lokaler Lab-Release-Produzent
+
+`scripts/ongrow_release_signing.py` verwendet ausschließlich die Python-
+Standardbibliothek und ein ausdrücklich ausgewähltes vorhandenes OpenSSL 3.
+Es installiert keine Werkzeuge, lädt nichts hoch und verändert keine
+Client-Konfiguration. Ed25519 verwendet `pkeyutl -sign -rawin`, ohne Digest oder
+Prehash, gemäß der [OpenSSL-Dokumentation](https://docs.openssl.org/3.0/man1/openssl-pkeyutl/).
+Der private PEM-Inhalt fließt bei der Erzeugung direkt von OpenSSL in einen
+exklusiv angelegten Dateideskriptor. Python liest ihn nicht. Diagnostik von
+OpenSSL-Schlüsseloperationen wird abgefangen und nicht weitergereicht.
+
+Alle Pfade müssen absolute, nicht umgeleitete lokale Pfade sein. Auf macOS
+sind temporäre Pfade zuvor zu kanonisieren, damit der Systemalias `/var`
+nicht als Eingabepfad verwendet wird. Bestehende Schlüssel- oder Releaseziele,
+Symlinks, Reparse Points, Hardlinks, unerwartete Eigentümer und unsichere
+Rechte werden abgelehnt. Der Produzent repariert keine vorhandenen Rechte.
+Schlüsseldateien benötigen unter POSIX den aktuellen Benutzer als Eigentümer,
+Modus `0600` und ein unmittelbares Elternverzeichnis mit `0700`.
+Andere Eltern dürfen dem aktuellen Benutzer oder root gehören, dürfen aber
+nicht gruppen- oder weltbeschreibbar sein. Die lokalen CLI-Tests legen ihre
+privaten temporären Fixtureverzeichnisse außerhalb von Git im Benutzerverzeichnis an.
+
+Nur für das ausdrücklich gewählte Homebrew-Werkzeug
+`/opt/homebrew/opt/openssl@3/bin/openssl` und dessen kanonischen
+`/opt/homebrew/Cellar/openssl@3/<version>/bin/openssl` wird der konkrete
+Cellar-Elternpfad mit `0775` akzeptiert, wenn er nicht umgeleitet ist, dem
+aktuellen Benutzer gehört und seine tatsächliche Gruppe `admin` ist.
+Alle übrigen Werkzeugeltern und die reguläre ausführbare Werkzeugdatei
+bleiben strikt geprüft. Diese eng begrenzte Werkzeugausnahme gilt niemals für
+Schlüssel, Payload oder Output. Das ausgewählte lokale Werkzeug und die
+Administratoren werden vertraut; der Signierer schützt nicht vor einer
+administrativ kompromittierten Toolchain.
+
+Für ein neues, ausdrücklich freigegebenes externes Verzeichnis:
+
+```sh
+OPENSSL_TOOL=/absolute/path/to/trusted/openssl3
+KEY_DIR=/absolute/private/path/to/new-lab-key-directory
+python3 scripts/ongrow_release_signing.py init-key \
+  --directory "$KEY_DIR" --openssl "$OPENSSL_TOOL"
+```
+
+`init-key` legt ausschließlich neue Verzeichnisse mit `0700` an und schreibt
+`windows-lab-ed25519.pem` mit `0600` sowie
+`windows-lab-ed25519.pub` als rohe 32 öffentliche Bytes. Das Ed25519-SPKI
+aus OpenSSL wird vor dem Ableiten dieser Bytes exakt geprüft. Als Ergebnis
+erscheinen nur Erfolg und der SHA-256-Fingerprint des öffentlichen Schlüssels.
+Ein vorhandenes Ziel wird nicht wiederverwendet oder überschrieben.
+
+Erst mit einem tatsächlich gebauten und geprüften Eingangspaket, nach grüner
+nativer Verifier-CI und gesonderter Auslieferungsfreigabe, ist ein echter
+Release zulässig. Der Signierer kann EXE, ZIP und MSI als Payload signieren.
+Die MSI-Erweiterung erlaubt den vorhandenen WiX/MSI-Weg als späteren Produzenten,
+baut oder installiert aber selbst kein MSI. Keine Dateiendung beweist
+Produktidentität, Installerqualität, Lizenzvollständigkeit oder Authenticode.
+Diese Prüfungen und die Build-Provenienz bleiben Aufgabe des Eingangspakets.
+
+Die folgenden Variablen müssen aus dem geprüften Paket und der freigegebenen
+Releaseplanung stammen. Beispiel-Origin und Prefix sind keine produktive
+Downloadkonfiguration. Der Output bezeichnet ein neues Releaseverzeichnis;
+sein sicherer Elternpfad muss bereits existieren.
+
+```sh
+python3 scripts/ongrow_release_signing.py sign \
+  --payload "$VERIFIED_PAYLOAD" \
+  --key-file "$KEY_DIR/windows-lab-ed25519.pem" \
+  --public-key-file "$KEY_DIR/windows-lab-ed25519.pub" \
+  --openssl "$OPENSSL_TOOL" --output-dir "$NEW_RELEASE_DIR" \
+  --product customer-desk --platform windows-x64 --channel lab \
+  --release-sequence "$NEXT_SEQUENCE" --previous-sequence "$PREVIOUS_SEQUENCE" \
+  --version "$UPSTREAM_VERSION" --source-sha "$VERIFIED_SOURCE_SHA" \
+  --issued-at "$ISSUED_UNIX_SECONDS" --expires-at "$EXPIRES_UNIX_SECONDS" \
+  --origin https://updates.example.test --path-prefix /releases/
+```
+
+Für Console-Pakete wird ausdrücklich `--product support-console` angegeben.
+Der Produzent erlaubt nur `lab` und `windows-x64`, keine Stable-Releases.
+Sequenzen und Zeiten sind u64-Werte; der neue Zähler muss die ausdrücklich
+angegebene vorherige Sequenz übersteigen. Der Zeitraum muss beim Signieren
+gültig sein. `previous-sequence` ist eine Produzenteneingabe und kein
+geschützter persistenter Clientzustand.
+
+Der sichere Payload-Basename darf nicht mit den Metadatendateien kollidieren.
+Die URL entsteht aus kanonischem HTTPS-DNS-Origin, validiertem Prefix,
+Release-Sequenz und Basename. Ein freier Download-URI wird nicht übernommen.
+Quelle und Output dürfen nicht überlappen; Schlüssel müssen außerhalb von
+Git und außerhalb des Output liegen. Das Paket wird exklusiv kopiert;
+Quelländerungen während des Kopierens führen zum Abbruch. Größe und SHA-256
+werden über die tatsächlich kopierten Bytes berechnet.
+
+Der Output enthält genau die unveränderte Payload, `manifest.sig` mit 64 Bytes
+und deterministisches Schema-1-UTF-8-JSON als `manifest.json`. Die Signatur
+authentifiziert Domain inklusive Nullbyte und exakt diese JSON-Bytes.
+OpenSSL prüft sie gegen den expliziten lokalen Public-Key nach.
+`manifest.json` entsteht erst nach erfolgreicher Prüfung. Fehlercleanup
+entfernt nur nachweislich eigene unveränderte Inodes, nicht fremde Restdateien.
+Es gibt keinen `latest`-Rewrite, keinen eingebetteten Public-Key als
+Client-Bootstrap und keine Auto-Apply-Freigabe. Manifests bleiben öffentliche
+Releaseinformationen, keine Schlüssel- oder Gerätedatenspeicher.
 
 Vor Produktionsaktivierung sind Kundenclient-Abnahme, vertrauenswürdiger
 Key-Bootstrap, Schlüsselrotation, Kompromittierungsbehandlung und ein Recovery-
@@ -157,11 +258,24 @@ Quelltextprüfungen kontrollieren den ersten Guard an den Update-Einstiegen und
 die frühe CLI-Reihenfolge. Sie sind kein ausgeführter Plattform-Lifecycle-Test.
 
 Der vorbereitete native Windows-Console-Labworkflow führt nach Erzeugung der
-Bridge-Dateien aus:
+Bridge-Dateien aus. Im Linux-Bridgejob testet er den Produzenten mit echtem,
+vorhandenem OpenSSL 3 und exportiert ausschließlich vier öffentliche
+synthetische Dateien unter dem ignorierten `target/ongrow-release-test-fixtures`:
+`public.key`, `manifest.json`, `manifest.sig` und `payload.bin`.
+Nur diese vier zusätzlichen Dateien werden im Bridge-Artefakt transportiert,
+niemals der private synthetische Schlüssel. Der Windowsjob setzt
+`ONGROW_RELEASE_TEST_FIXTURE_DIR` im Rust-Teststep und braucht kein OpenSSL.
 
 ```sh
 cargo test --locked --lib --features flutter ongrow_update
 ```
+
+Der Interoperabilitätstest ruft die unveränderten echten `verify_manifest`-
+und `verify_payload`-Funktionen mit dem OpenSSL-Export auf und prüft gültige
+Bytes sowie Manifest- und Payload-Manipulationen. Ohne Fixturevariable meldet
+ein lokaler Lauf ausdrücklich, dass diese Interoperabilitätsprüfung nicht
+ausgeführt wurde. In CI ist eine fehlende Variable ein harter Testfehler.
+Das ist kein Nachweis einer ausgeführten Windows-Installation oder Auto-Apply.
 
 Ein isolierter lokaler Harness kann dieselben unveränderten Moduldateien mit
 den vorhandenen Lockfile-Versionen von serde, sha2, url und sodiumoxide testen,
