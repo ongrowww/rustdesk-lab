@@ -3,6 +3,54 @@ use serde_json::{json, Value};
 
 const PAYLOAD: &[u8] = b"synthetic complete Setup.exe bytes";
 
+#[test]
+fn openssl_producer_public_fixtures_verify_with_native_crypto() {
+    let Some(directory) = std::env::var_os("ONGROW_RELEASE_TEST_FIXTURE_DIR") else {
+        eprintln!("OpenSSL producer interoperability not executed: CI-only fixtures absent");
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must provide public release fixtures"
+        );
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    let public = std::fs::read(directory.join("public.key")).unwrap();
+    let raw = std::fs::read(directory.join("manifest.json")).unwrap();
+    let signature = std::fs::read(directory.join("manifest.sig")).unwrap();
+    let payload = std::fs::read(directory.join("payload.bin")).unwrap();
+    assert_eq!(public.len(), 32);
+    assert_eq!(signature.len(), 64);
+    let location = DownloadLocation::new("https://updates.example.test", "/releases/").unwrap();
+    let context = Context {
+        product: Product::CustomerDesk,
+        platform: Platform::WindowsX64,
+        channel: Channel::Lab,
+        now_unix_seconds: 100,
+        baked_current_sequence: 7,
+        last_accepted_sequence: LastAcceptedSequence::Known(8),
+        download_location: &location,
+    };
+    let candidate = verify_manifest(&raw, &signature, &public, &context).unwrap();
+    candidate.verify_payload(&payload).unwrap();
+    assert_eq!(candidate.manifest().release_sequence, 9);
+    let mut changed_manifest = raw.clone();
+    changed_manifest.push(b' ');
+    assert_eq!(
+        verify_manifest(&changed_manifest, &signature, &public, &context).unwrap_err(),
+        Error::InvalidSignature
+    );
+    let mut changed_payload = payload.clone();
+    changed_payload[0] ^= 1;
+    assert_eq!(
+        candidate.verify_payload(&changed_payload),
+        Err(Error::PayloadHash)
+    );
+    assert_eq!(
+        candidate.verify_payload(&payload[..payload.len() - 1]),
+        Err(Error::PayloadSize)
+    );
+}
+
 struct Fixture {
     public: sign::PublicKey,
     secret: sign::SecretKey,

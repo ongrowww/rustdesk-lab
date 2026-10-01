@@ -30,6 +30,9 @@ on:
       - 'flutter/windows/**'
       - 'scripts/*ongrow*console*'
       - 'scripts/test_ongrow_ci_isolation.py'
+      - 'scripts/ongrow_release_signing.py'
+      - 'scripts/test_ongrow_release_signing.py'
+      - 'docs/ongrow-update-contract.md'
 
 permissions:
   contents: read
@@ -174,6 +177,16 @@ jobs:
           flutter test --no-pub test/ongrow_support_console_test.dart
           popd
 
+      - name: Test isolated lab release signing with existing OpenSSL 3
+        shell: bash
+        run: |
+          openssl_tool="$(command -v openssl)"
+          test -n "$openssl_tool"
+          python3 scripts/test_ongrow_release_signing.py \
+            --openssl "$openssl_tool" \
+            --export-fixtures-dir "$GITHUB_WORKSPACE/target/ongrow-release-test-fixtures"
+          test "$(find target/ongrow-release-test-fixtures -maxdepth 1 -type f | wc -l)" -eq 4
+
       - name: Upload bridge artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -185,6 +198,10 @@ jobs:
             ./src/bridge_generated.io.rs
             ./flutter/lib/generated_bridge.dart
             ./flutter/lib/generated_bridge.freezed.dart
+            ./target/ongrow-release-test-fixtures/public.key
+            ./target/ongrow-release-test-fixtures/manifest.json
+            ./target/ongrow-release-test-fixtures/manifest.sig
+            ./target/ongrow-release-test-fixtures/payload.bin
 
   build-windows-x64:
     needs: generate-bridge
@@ -322,8 +339,14 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          $env:ONGROW_RELEASE_TEST_FIXTURE_DIR = (Resolve-Path "target/ongrow-release-test-fixtures").Path
+          foreach ($name in @('public.key', 'manifest.json', 'manifest.sig', 'payload.bin')) {
+            if (-not (Test-Path (Join-Path $env:ONGROW_RELEASE_TEST_FIXTURE_DIR $name) -PathType Leaf)) { throw "Public release fixture missing" }
+          }
           python scripts/test_ongrow_ci_isolation.py
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation tests failed" }
           cargo test --locked --lib --features flutter ongrow_ci
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation Rust tests failed" }
           cargo test --locked --lib --features flutter ongrow_update
           if ($LASTEXITCODE -ne 0) { throw "OnGROW signed update tests failed" }
           cargo test --locked --lib --features flutter ongrow_control
