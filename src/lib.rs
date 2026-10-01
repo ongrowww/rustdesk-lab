@@ -64,6 +64,7 @@ mod ongrow_control;
 #[cfg(feature = "flutter")]
 mod ongrow_operator;
 mod ongrow_ci;
+mod ongrow_update;
 
 mod ui_cm_interface;
 mod ui_interface;

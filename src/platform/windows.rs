@@ -2077,6 +2077,7 @@ pub fn remove_custom_client_staging_dir(staging_dir: &Path) -> ResultType<bool> 
 //    (e.g., is a symlink or has invalid contents).
 // 3. Err if any unexpected error occurs during file operations.
 pub fn prepare_custom_client_update() -> ResultType<bool> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let custom_client_staging_dir = get_custom_client_staging_dir();
     let current_exe = std::env::current_exe()?;
     let current_exe_dir = current_exe
@@ -3304,6 +3305,7 @@ fn get_directory_size_kb(path: &str) -> u64 {
 }
 
 pub fn update_me(debug: bool) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let app_name = crate::get_app_name();
     let src_exe = std::env::current_exe()?.to_string_lossy().to_string();
     let (subkey, path, _, exe) = get_install_info();
@@ -3588,6 +3590,7 @@ fn kill_process_by_pids(name: &str, pids: Vec<Pid>) -> ResultType<()> {
 pub fn handle_custom_client_staging_dir_before_update(
     custom_client_staging_dir: &PathBuf,
 ) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let Some(current_exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -3663,6 +3666,7 @@ pub fn handle_custom_client_staging_dir_before_update(
 
 // Used for auto update and manual update in the main window.
 pub fn update_to(file: &str) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     if file.ends_with(".exe") {
         let custom_client_staging_dir = get_custom_client_staging_dir();
         if crate::is_custom_client() {
@@ -3699,6 +3703,7 @@ pub fn update_to(file: &str) -> ResultType<()> {
 //    `1` and `3` must be done in custom actions.
 //    We need also to handle the command line parsing to find the tray processes.
 pub fn update_me_msi(msi: &str, quiet: bool) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let quiet_args = if quiet { " /qn LAUNCH_TRAY_APP=N" } else { "" };
     let cmds =
         format!("chcp 65001 && msiexec /i \"{msi}\"{quiet_args} REBOOT=ReallySuppress /norestart");
@@ -3793,6 +3798,9 @@ fn run_after_run_cmds(silent: bool) {
 
 #[inline]
 pub fn try_remove_temp_update_files() {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     let temp_dir = std::env::temp_dir();
     let Ok(entries) = std::fs::read_dir(&temp_dir) else {
         log::debug!("Failed to read temp directory: {:?}", temp_dir);

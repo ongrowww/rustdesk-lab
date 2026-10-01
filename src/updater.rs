@@ -85,11 +85,15 @@ pub fn update_controlling_session_count(count: usize) {
 
 #[allow(dead_code)]
 pub fn start_auto_update() {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     let _sender = TX_MSG.lock().unwrap();
 }
 
 #[allow(dead_code)]
 pub fn manually_check_update() -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let sender = TX_MSG.lock().unwrap();
     sender.send(UpdateMsg::CheckUpdate)?;
     Ok(())
@@ -97,6 +101,9 @@ pub fn manually_check_update() -> ResultType<()> {
 
 #[allow(dead_code)]
 pub fn stop_auto_update() {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     let sender = TX_MSG.lock().unwrap();
     sender.send(UpdateMsg::Exit).unwrap_or_default();
 }
@@ -133,12 +140,18 @@ fn has_no_controlling_conns() -> bool {
 }
 
 fn start_auto_update_check() -> Sender<UpdateMsg> {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return channel().0;
+    }
     let (tx, rx) = channel();
     std::thread::spawn(move || start_auto_update_check_(rx));
     return tx;
 }
 
 fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     std::thread::sleep(INITIAL_CHECK_DELAY);
     if let Err(e) = check_update(false) {
         log::error!("Error checking for updates: {}", e);
@@ -173,6 +186,7 @@ fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
 }
 
 fn check_update(manually: bool) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     // On macOS, auto-update is handled by check_update_as_root() in the service process.
     // The shared check_update() path is only used for manual update checks from the GUI.
     #[cfg(target_os = "macos")]
@@ -266,6 +280,10 @@ fn check_update(manually: bool) -> ResultType<()> {
 
 #[cfg(target_os = "windows")]
 fn update_new_version(update_msi: bool, version: &str, file_path: &PathBuf) {
+    if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+        log::warn!("{}", err);
+        return;
+    }
     log::debug!(
         "New version is downloaded, update begin, update msi: {update_msi}, version: {version}, file: {:?}",
         file_path.to_str()
@@ -406,6 +424,7 @@ fn is_plain_update_filename(filename: &str) -> bool {
 }
 
 pub fn get_download_file_from_url(url: &str) -> Option<PathBuf> {
+    crate::ongrow_update::require_upstream_allowed().ok()?;
     get_update_download_file_from_url(url)
 }
 
@@ -492,6 +511,9 @@ fn wait_for_failed_update_retry() {
 /// Called from `start_os_service()` which runs as root via LaunchDaemon.
 #[cfg(target_os = "macos")]
 pub fn start_auto_update_macos() {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     let spawn_result = std::thread::Builder::new()
         .name("rustdesk-auto-update".to_owned())
         .spawn(|| {
@@ -533,6 +555,7 @@ pub fn start_auto_update_macos() {
 
 #[cfg(target_os = "macos")]
 pub fn check_update_as_root() -> ResultType<bool> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let _update_lock = acquire_mac_update_lock()?;
     // Allow-auto-update setting
     if !config::Config::get_bool_option(config::keys::OPTION_ALLOW_AUTO_UPDATE) {
@@ -656,7 +679,7 @@ pub fn check_update_as_root() -> ResultType<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::get_download_file_from_url;
+    use super::get_update_download_file_from_url as get_download_file_from_url;
 
     #[test]
     fn update_download_file_accepts_expected_github_asset_urls() {

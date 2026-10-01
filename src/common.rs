@@ -939,6 +939,9 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     if is_custom_client() {
         return;
     }
@@ -952,6 +955,7 @@ pub fn check_software_update() {
 // Because the url is always `https://api.rustdesk.com/version/latest`.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let (request, url) =
         hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
     let proxy_conf = Config::get_socks();
@@ -2198,6 +2202,7 @@ pub fn get_dst_align_rgba() -> usize {
 }
 
 pub fn read_custom_client(config: &str) {
+    crate::ongrow_update::initialize_product_policy();
     let Ok(data) = decode64(config) else {
         log::error!("Failed to decode custom client config");
         return;

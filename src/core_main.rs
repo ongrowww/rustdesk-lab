@@ -29,6 +29,13 @@ macro_rules! my_println{
 /// If it returns [`Some`], then the process will continue, and flutter gui will be started.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<Vec<String>> {
+    crate::ongrow_update::initialize_product_policy();
+    if crate::ongrow_update::is_update_command(std::env::args().skip(1)) {
+        if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+            log::warn!("{}", err);
+            return None;
+        }
+    }
     if !crate::common::global_init() {
         return None;
     }
@@ -240,6 +247,10 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 return None;
             } else if args[0] == "--update" {
+                if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+                    log::warn!("{}", err);
+                    return None;
+                }
                 if config::is_disable_installation() {
                     return None;
                 }
@@ -351,6 +362,10 @@ pub fn core_main() -> Option<Vec<String>> {
         {
             use crate::platform;
             if args[0] == "--update" {
+                if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+                    log::warn!("{}", err);
+                    return None;
+                }
                 if args.len() > 1 && args[1].ends_with(".dmg") {
                     // Version check is unnecessary unless downgrading to an older version
                     // that lacks "update dmg" support. This is a special case since we cannot

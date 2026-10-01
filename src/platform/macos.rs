@@ -927,6 +927,9 @@ pub fn quit_gui() {
 
 #[inline]
 pub fn try_remove_temp_update_dir(dir: Option<&str>) {
+    if crate::ongrow_update::require_upstream_allowed().is_err() {
+        return;
+    }
     let target_path_buf = dir.map(PathBuf::from).unwrap_or_else(get_update_temp_dir);
     let target_path = target_path_buf.as_path();
     if target_path.exists() {
@@ -935,6 +938,7 @@ pub fn try_remove_temp_update_dir(dir: Option<&str>) {
 }
 
 pub fn update_me() -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let is_installed_daemon = is_installed_daemon(false);
     let option_stop_service = "stop-service";
     let is_service_stopped = hbb_common::config::option2bool(
@@ -1005,6 +1009,7 @@ end run
 }
 
 pub fn update_from_dmg(dmg_path: &str) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let update_temp_dir = get_update_temp_dir_string();
     println!("Starting update from DMG: {}", dmg_path);
     extract_dmg(dmg_path, &update_temp_dir)?;
@@ -1015,6 +1020,7 @@ pub fn update_from_dmg(dmg_path: &str) -> ResultType<()> {
 }
 
 pub fn update_to(_file: &str) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let update_temp_dir = get_update_temp_dir_string();
     update_extracted(&update_temp_dir)?;
     Ok(())
@@ -1080,6 +1086,7 @@ fn validate_update_tree(path: &Path, framework_root: Option<&Path>) -> ResultTyp
 /// Performs a silent update from a DMG file without any osascript dialog.
 /// Must be called from a process running as root (e.g. the service binary).
 pub fn update_from_dmg_as_root(dmg_path: &str, expected_version: &str) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let app_name = crate::get_app_name();
     if app_name.is_empty()
         || !app_name
@@ -1775,6 +1782,10 @@ rm -rf {tmp_dir}
 }
 
 pub fn extract_update_dmg(file: &str) {
+    if let Err(err) = crate::ongrow_update::require_upstream_allowed() {
+        log::warn!("{}", err);
+        return;
+    }
     let update_temp_dir = get_update_temp_dir_string();
     let mut evt: HashMap<&str, String> =
         HashMap::from([("name", "extract-update-dmg".to_string())]);
@@ -1873,6 +1884,7 @@ fn extract_dmg_inner(dmg_path: &str, target_dir: &str) -> ResultType<()> {
 }
 
 fn update_extracted(target_dir: &str) -> ResultType<()> {
+    crate::ongrow_update::require_upstream_allowed()?;
     let app_name = crate::get_app_name();
     let exe_path = format!(
         "{}/{}.app/Contents/MacOS/{}",
