@@ -183,6 +183,14 @@ jobs:
             -o "$RUNNER_TEMP/permission-guide-test"
           "$RUNNER_TEMP/permission-guide-test"
 
+      - name: Verify locked macOS update integration
+        run: |
+          python3 scripts/test_ongrow_macos_update_profile.py
+          python3 scripts/test_ongrow_sparkle_probe.py
+          xcrun swiftc flutter/macos/Runner/OnGrowUpdatePolicy.swift scripts/test_ongrow_macos_update_policy.swift -o "$RUNNER_TEMP/update-policy-test"
+          "$RUNNER_TEMP/update-policy-test"
+          plutil -lint flutter/macos/Runner.xcodeproj/project.pbxproj
+
       - name: Validate and apply OnGROW product profile
         shell: bash
         run: |
@@ -395,6 +403,7 @@ jobs:
           RUSTDESK_APP_PATH="flutter/build/macos/Build/Products/Release/OnGROW Support Desk.app"
           RUSTDESK_SERVICE_PATH="$RUSTDESK_APP_PATH/Contents/MacOS/service"
           test -x "$RUSTDESK_SERVICE_PATH"
+          python3 -c 'import sys; sys.path.insert(0, "scripts"); from pathlib import Path; from test_ongrow_sparkle_probe import sign_framework; sign_framework(Path(sys.argv[1]))' "$RUSTDESK_APP_PATH/Contents/Frameworks/Sparkle.framework"
           codesign \
             --force \
             --sign - \
