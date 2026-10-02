@@ -32,6 +32,15 @@ const JOURNAL: &str = "state-v1.journal";
 const READY: u8 = 0;
 const PENDING: u8 = 1;
 
+// Fixed categories only. No path, SID, ACL, username or OS error is printed.
+// The product build has no diagnostic output and rejects the same conditions.
+fn untrusted(category: &'static str) -> Error {
+    #[cfg(all(test, ongrow_session_gate_probe))]
+    eprintln!("ONGROW_GATE_REJECT:{category}");
+    let _ = category;
+    Error::Untrusted
+}
+
 // CoTaskMemFree's existing crate feature is not enabled. Import this one SDK
 // function directly rather than changing dependency features or the lockfile.
 #[link(name = "ole32")]
@@ -47,12 +56,12 @@ struct User(Vec<usize>);
 impl User {
     fn current() -> Result<Self, Error> {
         let mut token = Token(HANDLE::default());
-        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token.0) }.map_err(|_| Error::Untrusted)?;
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token.0) }.map_err(|_| untrusted("token-open"))?;
         let mut size = 0;
         let _ = unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &mut size) };
-        if size == 0 || size > 64 * 1024 { return Err(Error::Untrusted); }
+        if size == 0 || size > 64 * 1024 { return Err(untrusted("token-size")); }
         let mut buffer = vec![0usize; (size as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()];
-        unsafe { GetTokenInformation(token.0, TokenUser, Some(buffer.as_mut_ptr().cast()), size, &mut size) }.map_err(|_| Error::Untrusted)?;
+        unsafe { GetTokenInformation(token.0, TokenUser, Some(buffer.as_mut_ptr().cast()), size, &mut size) }.map_err(|_| untrusted("token-user"))?;
         Ok(Self(buffer))
     }
     fn sid(&self) -> PSID { unsafe { (*(self.0.as_ptr().cast::<TOKEN_USER>())).User.Sid } }
@@ -68,11 +77,11 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> boo
 
 fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor: bool) -> Result<(), Error> {
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    unsafe { GetFileInformationByHandle(handle(file), &mut information) }.map_err(|_| Error::Untrusted)?;
+    unsafe { GetFileInformationByHandle(handle(file), &mut information) }.map_err(|_| untrusted("attributes-read"))?;
     if information.dwFileAttributes & 0x400 != 0
         || (information.dwFileAttributes & 0x10 != 0) != directory
         || (!directory && information.nNumberOfLinks != 1)
-    { return Err(Error::Untrusted); }
+    { return Err(untrusted("attributes-or-hardlinks")); }
     let mut owner = PSID::default();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut descriptor = Descriptor(PSECURITY_DESCRIPTOR::default());
@@ -80,27 +89,28 @@ fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor
         GetSecurityInfo(handle(file), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             Some(&mut owner), None, Some(&mut dacl), None, Some(&mut descriptor.0))
     };
-    if result.0 != 0 || descriptor.0.0.is_null() || dacl.is_null()
-        || !trusted_sid(owner, user, product, ancestor)
-        || (!ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err())
-    { return Err(Error::Untrusted); }
+    if result.0 != 0 || descriptor.0.0.is_null() || dacl.is_null() { return Err(untrusted("security-descriptor")); }
+    if !trusted_sid(owner, user, product, ancestor) { return Err(untrusted("owner-trust")); }
+    if !ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err() {
+        return Err(untrusted("owner-exact-user"));
+    }
     let mut size = ACL_SIZE_INFORMATION::default();
-    unsafe { GetAclInformation(dacl, (&mut size as *mut ACL_SIZE_INFORMATION).cast(), std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) }.map_err(|_| Error::Untrusted)?;
+    unsafe { GetAclInformation(dacl, (&mut size as *mut ACL_SIZE_INFORMATION).cast(), std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) }.map_err(|_| untrusted("acl-information"))?;
     for index in 0..size.AceCount {
         let mut pointer = std::ptr::null_mut();
-        unsafe { GetAce(dacl, index, &mut pointer) }.map_err(|_| Error::Untrusted)?;
-        if pointer.is_null() { return Err(Error::Untrusted); }
+        unsafe { GetAce(dacl, index, &mut pointer) }.map_err(|_| untrusted("acl-entry-read"))?;
+        if pointer.is_null() { return Err(untrusted("acl-entry-null")); }
         let header = unsafe { &*pointer.cast::<ACE_HEADER>() };
         if header.AceFlags & INHERIT_ONLY_ACE.0 as u8 != 0 { continue; }
         if header.AceType == 1 { continue; } // ACCESS_DENIED_ACE_TYPE
-        if header.AceType != 0 || (header.AceSize as usize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>() { return Err(Error::Untrusted); }
+        if header.AceType != 0 || (header.AceSize as usize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>() { return Err(untrusted("acl-entry-type-or-size")); }
         let ace = unsafe { &*pointer.cast::<ACCESS_ALLOWED_ACE>() };
         let sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
         // Ancestors may permit creating siblings. They must not permit replacing
         // or reconfiguring existing protected children. The protected root and
         // both files reject any foreign write capability.
         let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };
-        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) { return Err(Error::Untrusted); }
+        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) { return Err(untrusted("forbidden-access")); }
     }
     Ok(())
 }
@@ -112,28 +122,32 @@ fn open(path: &Path, writable: bool, directory: bool, create: bool) -> Result<Fi
         // lease. Neither an unprivileged rename nor a reparse swap is accepted.
         .share_mode(1 | 2)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | if directory { FILE_FLAG_BACKUP_SEMANTICS.0 } else { 0 });
-    options.open(path).map_err(|error| if error.kind() == std::io::ErrorKind::NotFound { Error::MissingGate } else { Error::Untrusted })
+    options.open(path).map_err(|error| if error.kind() == std::io::ErrorKind::NotFound { Error::MissingGate } else { untrusted(if directory { "directory-open" } else if create { "file-create" } else { "file-open" }) })
 }
 fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Error> {
     let components: Vec<_> = path.components().collect();
-    let Some(Component::Prefix(prefix)) = components.first() else { return Err(Error::Untrusted); };
-    let Prefix::Disk(letter) = prefix.kind() else { return Err(Error::Untrusted); };
+    let Some(Component::Prefix(prefix)) = components.first() else { return Err(untrusted("root-prefix")); };
+    let Prefix::Disk(letter) = prefix.kind() else { return Err(untrusted("root-drive-prefix")); };
     let volume = PathBuf::from(format!("{}:\\", letter as char));
     // No UNC, mapped network/removable drive, or reparse-mounted volume.
-    if unsafe { GetDriveTypeW(PCWSTR(wide(&volume).as_ptr())) } != 3 { return Err(Error::Untrusted); }
+    if unsafe { GetDriveTypeW(PCWSTR(wide(&volume).as_ptr())) } != 3 { return Err(untrusted("root-drive-type")); }
     let mut current = PathBuf::new();
     let mut held = Vec::new();
     for (index, component) in components.iter().enumerate() {
         match component {
             Component::Prefix(_) | Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
-            _ => return Err(Error::Untrusted),
+            _ => return Err(untrusted("directory-component")),
         }
         if index == 0 { continue; }
         let file = open(&current, false, true, false)?;
-        inspect(&file, user, product, true, index + 1 < components.len())?;
+        inspect(&file, user, product, true, index + 1 < components.len()).map_err(|error| {
+            #[cfg(all(test, ongrow_session_gate_probe))]
+            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index + 1 < components.len() { "ancestor" } else { "protected-root" });
+            error
+        })?;
         held.push(file);
     }
-    if held.is_empty() { return Err(Error::Untrusted); }
+    if held.is_empty() { return Err(untrusted("directory-empty")); }
     Ok(held)
 }
 fn root(product: Product) -> Result<PathBuf, Error> {
@@ -205,15 +219,23 @@ fn initialize_at(path: &Path, product: Product) -> Result<(), Error> {
     for name in [GATE, JOURNAL] {
         match std::fs::symlink_metadata(path.join(name)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
-            _ => return Err(Error::Untrusted),
+            _ => return Err(untrusted("bootstrap-state-already-present")),
         }
     }
     let mut journal = open(&path.join(JOURNAL), true, false, true)?;
-    inspect(&journal, &user, product, false, false)?;
+    inspect(&journal, &user, product, false, false).map_err(|error| {
+        #[cfg(all(test, ongrow_session_gate_probe))]
+        eprintln!("ONGROW_GATE_REJECT_CONTEXT:journal-bootstrap");
+        error
+    })?;
     journal.write_all(&[READY]).map_err(|_| Error::Io)?;
     journal.sync_all().map_err(|_| Error::Io)?;
     let gate = open(&path.join(GATE), true, false, true)?;
-    inspect(&gate, &user, product, false, false)?;
+    inspect(&gate, &user, product, false, false).map_err(|error| {
+        #[cfg(all(test, ongrow_session_gate_probe))]
+        eprintln!("ONGROW_GATE_REJECT_CONTEXT:gate-bootstrap");
+        error
+    })?;
     gate.sync_all().map_err(|_| Error::Io)?;
     Ok(())
 }

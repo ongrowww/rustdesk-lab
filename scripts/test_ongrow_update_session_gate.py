@@ -58,6 +58,23 @@ class SessionGateTests(unittest.TestCase):
         self.assertIn("LOCK_NB", (ROOT / "src/ongrow_update/session_gate/macos.rs").read_text())
         self.assertIn("LOCKFILE_FAIL_IMMEDIATELY", (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text())
 
+    def test_native_suite_and_diagnostics_are_probe_only(self):
+        tests = (ROOT / "src/ongrow_update/session_gate_tests.rs").read_text()
+        ordinary, native = tests.split("#[cfg(ongrow_session_gate_probe)]\nmod probe {", 1)
+        self.assertIn("fn default_policy_has_no_side_effects", ordinary)
+        self.assertNotIn("ONGROW_GATE_TEST_ROOT", ordinary)
+        self.assertIn('var_os("ONGROW_GATE_TEST_ROOT").expect("isolated test root")', native)
+        self.assertIn('module_path!().split_once("::")', native)
+        self.assertNotIn('"session_gate::tests::native_child"', native)
+        fixture = (FIXTURE / "lib.rs").read_text()
+        self.assertIn("#[cfg(not(ongrow_session_gate_probe))]", fixture)
+        self.assertIn("compile_error!", fixture)
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        self.assertIn("#[cfg(all(test, ongrow_session_gate_probe))]", windows)
+        self.assertIn('eprintln!("ONGROW_GATE_REJECT:{category}")', windows)
+        self.assertNotIn("{:?}", windows)
+        self.assertNotIn("std::env::", windows)
+
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):
         platform = "windows" if os.name == "nt" else "macos"
@@ -85,13 +102,47 @@ class SessionGateTests(unittest.TestCase):
             environment = os.environ.copy()
             environment.pop("ONGROW_UPDATE_SESSION_GATE", None)
             environment.pop("ONGROW_PRODUCT_ROLE", None)
+            # Only this private probe gets the native-fixture marker. Do not
+            # inherit caller rustflags that could bake product runtime policy.
+            environment.pop("CARGO_ENCODED_RUSTFLAGS", None)
+            environment["RUSTFLAGS"] = "--check-cfg=cfg(ongrow_session_gate_probe) --cfg ongrow_session_gate_probe"
             environment["ONGROW_GATE_TEST_ROOT"] = str(state)
             environment["CARGO_TARGET_DIR"] = str(scratch / "build")
-            command = ["cargo", "test", "--manifest-path", str(scratch / "Cargo.toml")]
+            command = ["cargo", "test", "--lib", "--manifest-path", str(scratch / "Cargo.toml")]
             if platform == "macos" and os.environ.get("GITHUB_ACTIONS") != "true":
                 command.append("--offline")
             try:
+                listing = subprocess.run(command + ["--", "--list"], env=environment,
+                                         capture_output=True, text=True, timeout=180)
+                self.assertEqual(listing.returncode, 0, listing.stderr)
+                self.assertIn("session_gate::tests::probe::real_shared_sessions_block_exclusive_until_last_drop: test", listing.stdout)
                 subprocess.run(command + ["--", "--test-threads=1"], check=True, env=environment, timeout=180)
+                missing_root = environment.copy()
+                missing_root.pop("ONGROW_GATE_TEST_ROOT", None)
+                missing = subprocess.run(command + ["--", "--exact", "session_gate::tests::probe::real_shared_sessions_block_exclusive_until_last_drop"],
+                                         env=missing_root, capture_output=True, text=True, timeout=180)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertIn("isolated test root", missing.stdout + missing.stderr)
+
+                # Import the exact source under the full app module path, with
+                # no native marker or root. This is not a desktop app build.
+                app_source = scratch / "app-shape.rs"
+                app_source.write_text(
+                    '#![allow(dead_code)]\nextern crate self as hbb_common;\n'
+                    '#[cfg(target_os = "macos")] pub extern crate libc;\n'
+                    'mod ongrow_update {\n#[path = ' + json.dumps(str(ROOT / "src/ongrow_update/session_gate.rs")) + ']\n'
+                    'mod session_gate;\n}\n'
+                )
+                (scratch / "Cargo.toml").write_text(manifest.rsplit("\n[lib]\n", 1)[0] +
+                                                  "\n[lib]\npath = " + json.dumps(str(app_source)) + "\n")
+                ordinary = missing_root.copy()
+                ordinary["RUSTFLAGS"] = "--check-cfg=cfg(ongrow_session_gate_probe)"
+                listing = subprocess.run(command + ["--", "--list"], check=True, env=ordinary,
+                                         capture_output=True, text=True, timeout=180)
+                self.assertIn("ongrow_update::session_gate::tests::default_policy_has_no_side_effects: test", listing.stdout)
+                self.assertNotIn("::probe::", listing.stdout)
+                self.assertNotIn("native_child", listing.stdout)
+                subprocess.run(command + ["--", "--test-threads=1"], check=True, env=ordinary, timeout=180)
             finally:
                 if state_directory is not None:
                     state_directory.cleanup()

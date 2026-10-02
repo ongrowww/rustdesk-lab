@@ -103,6 +103,22 @@ ausschließlich auf dem separaten Windows-Runner. Dessen temporäre Lockdatei
 bleiben unverändert. Weder RustDesk noch Dienst, Netzwerk oder Kundenregistrierung
 werden gestartet.
 
+Nur dieser isolierte Compileraufruf setzt `--cfg ongrow_session_gate_probe`.
+Die Fixture verweigert ohne diesen Marker das Kompilieren. Normale App-Tests
+entdecken ausschließlich den Default-off-Policy-Test, nicht die nativen
+Fixtures. Ein zusätzlicher schmaler Import derselben Quelldatei unter
+`ongrow_update::session_gate` prüft diese Trennung ohne Desktop-Build und ohne
+Testroot. Innerhalb der nativen Probe führt ein fehlender Testroot dagegen
+ausdrücklich zum Testfehler. Der Child-Testname wird aus dem echten Modulpfad
+ermittelt, nicht aus einem fest angenommenen App-Modulnamen.
+
+Die Windows-Probe gibt bei Trust-Ablehnungen nur feste Kategorien aus, etwa
+`owner-trust`, `forbidden-access` oder `directory-open`, und den festen Kontext
+`ancestor`, `protected-root`, `journal-bootstrap` oder `gate-bootstrap`.
+Pfade, SIDs, ACL-Inhalte und Kontonamen werden nicht ausgegeben. Diese Ausgabe
+existiert ausschließlich bei `cfg(test)` zusammen mit dem Probe-Marker.
+Alle Produktionsprüfungen und Trust-Regeln bleiben unverändert.
+
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte
 Lease-Clone/Subtask-Lebensdauer, unveränderte Gate-/Journal-Inodes, ungültige und

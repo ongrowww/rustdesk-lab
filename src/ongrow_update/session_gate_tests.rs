@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn default_policy_has_no_side_effects() {
+    assert_eq!(startup_policy().unwrap(), None);
+    let lease = admit().unwrap();
+    let _clone = lease.clone();
+    error(begin_installation(), Error::Disabled);
+    error(initialize(), Error::Disabled);
+}
+
+fn error<T>(result: Result<T, Error>, expected: Error) {
+    assert!(matches!(result, Err(value) if value == expected));
+}
+
+// Native fixtures are compiled only by the separate disposable probe. Ordinary
+// application tests must not discover them or require a private fixture root.
+#[cfg(ongrow_session_gate_probe)]
+mod probe {
+use super::*;
 use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::atomic::{AtomicU32, Ordering}};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -17,8 +36,9 @@ impl Fixture {
         Self(path)
     }
     fn child(&self, action: &str) -> Child {
+        let test = format!("{}::native_child", module_path!().split_once("::").unwrap().1);
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "session_gate::tests::native_child", "--nocapture"])
+            .args(["--exact", &test, "--nocapture"])
             .env("ONGROW_GATE_CHILD_ROOT", &self.0).env("ONGROW_GATE_CHILD_ACTION", action)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
         let output = child.stdout.take().unwrap();
@@ -36,19 +56,6 @@ impl Fixture {
     }
 }
 impl Drop for Fixture { fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); } }
-
-fn error<T>(result: Result<T, Error>, expected: Error) {
-    assert!(matches!(result, Err(value) if value == expected));
-}
-
-#[test]
-fn default_policy_has_no_side_effects() {
-    assert_eq!(startup_policy().unwrap(), None);
-    let lease = admit().unwrap();
-    let _clone = lease.clone();
-    error(begin_installation(), Error::Disabled);
-    error(initialize(), Error::Disabled);
-}
 
 #[test]
 fn real_shared_sessions_block_exclusive_until_last_drop() {
@@ -245,4 +252,5 @@ fn native_child() {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).unwrap();
     drop(lease);
+}
 }
