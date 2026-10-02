@@ -80,8 +80,7 @@ class SetupTests(unittest.TestCase):
 
     def test_foreign_private_and_windows_unsafe_names_before_mutation(self):
         for name in ("rustdesk.exe", "OnGROW Support Console.exe", "RuntimeBroker_rustdesk.exe",
-                     "data/private/token", "data/.env.test", "logs/client.log", "data/CON.txt",
-                     "data/trailing.", "data/key.pem"):
+                     "data/private/token", "data/.env.test", "logs/client.log", "data/key.pem"):
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"rejected")
@@ -90,6 +89,34 @@ class SetupTests(unittest.TestCase):
             # Remove empty synthetic sensitive directories, never the real repository.
             if path.parent != self.source and not any(path.parent.iterdir()):
                 path.parent.rmdir()
+
+    def test_windows_alias_names_are_rejected_on_every_filesystem(self):
+        original = self.source / "data/icudtl.dat"
+        original_bytes = original.read_bytes()
+        metadata = original.lstat()
+        real_lstat = Path.lstat
+        # Windows interprets device names and normalizes trailing dots. Inject
+        # the directory entries instead of creating aliases or device files.
+        for name, error in (("CON.txt", "Reserved Windows payload component"),
+                            ("trailing.", "Unsafe Windows payload component")):
+            with self.subTest(name=name):
+                injected_path = self.source / "data" / name
+                inspected = []
+
+                def fixture_lstat(path, *args, **kwargs):
+                    if path == injected_path:
+                        inspected.append(path.name)
+                        return metadata
+                    return real_lstat(path, *args, **kwargs)
+
+                entries = [(str(self.source / "data"), [], [name])]
+                with mock.patch.object(setup.os, "walk", return_value=entries), \
+                        mock.patch.object(Path, "lstat", new=fixture_lstat):
+                    with self.assertRaisesRegex(ValueError, error):
+                        self.validate()
+                self.assertEqual(inspected, [name])
+                self.assertFalse(self.output.exists())
+        self.assertEqual(original.read_bytes(), original_bytes)
 
     def test_casefold_duplicate_is_seen_on_every_filesystem(self):
         original = self.source / "data/icudtl.dat"
@@ -325,16 +352,25 @@ class SetupTests(unittest.TestCase):
         executable.write_bytes(b"upstream fixture")
         generator_path = str(setup.ROOT / "libs/portable/generate.py")
         fake_brotli = types.SimpleNamespace(compress=lambda data, quality: data)
-        for index, options in enumerate(([], ["-e", str(executable)],
-                                          ["-e", os.path.relpath(executable, Path.cwd())])):
-            output = self.root / f"upstream output {index}"
-            output.mkdir()
-            argv = [generator_path, "-f", str(source), "-o", str(output), *options]
-            with mock.patch.object(sys, "argv", argv), mock.patch.dict(sys.modules, brotli=fake_brotli), \
-                    mock.patch("subprocess.run") as compiler:
-                runpy.run_path(generator_path, run_name="__main__")
-            compiler.assert_called_once_with(["cargo", "build", "--locked", "--release"], check=True)
-            self.assertTrue((output / "data.bin").read_bytes().endswith(b"rustdesk./rustdesk.exe"))
+        caller_cwd = Path.cwd()
+        try:
+            # Runner TEMP may be on C: while the checkout is on D:. Relative
+            # CLI paths must be tested from a real cwd on the fixture's drive.
+            os.chdir(self.root)
+            for index, options in enumerate(([], ["-e", str(executable)],
+                                              ["-e", os.path.relpath(executable, Path.cwd())])):
+                output = self.root / f"upstream output {index}"
+                output.mkdir()
+                argv = [generator_path, "-f", str(source), "-o", str(output), *options]
+                with mock.patch.object(sys, "argv", argv), mock.patch.dict(sys.modules, brotli=fake_brotli), \
+                        mock.patch("subprocess.run") as compiler:
+                    runpy.run_path(generator_path, run_name="__main__")
+                compiler.assert_called_once_with(["cargo", "build", "--locked", "--release"], check=True)
+                self.assertTrue((output / "data.bin").read_bytes().endswith(b"rustdesk./rustdesk.exe"))
+                self.assertEqual(Path.cwd(), self.root)
+        finally:
+            os.chdir(caller_cwd)
+        self.assertEqual(Path.cwd(), caller_cwd)
 
     def test_ci_uses_trusted_head_existing_desk_and_offline_setup(self):
         workflow = (setup.ROOT / ".github/workflows/ongrow-lab-windows-x64.yml").read_text()
