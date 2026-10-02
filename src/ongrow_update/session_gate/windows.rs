@@ -1,0 +1,223 @@
+use super::{Error, Product};
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
+    path::{Component, Path, PathBuf, Prefix},
+};
+use windows::{
+    core::PCWSTR,
+    Win32::{
+        Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
+        Security::{
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetAce, GetAclInformation, GetTokenInformation, IsWellKnownSid,
+            ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+            DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
+            WinBuiltinAdministratorsSid, WinLocalSystemSid,
+        },
+        Storage::FileSystem::{
+            GetDriveTypeW, GetFileInformationByHandle, LockFileEx, UnlockFileEx,
+            BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LOCK_FILE_FLAGS,
+        },
+        System::{IO::OVERLAPPED, Threading::{GetCurrentProcess, OpenProcessToken}},
+        UI::Shell::{SHGetKnownFolderPath, FOLDERID_LocalAppData, FOLDERID_ProgramData, KF_FLAG_DEFAULT},
+    },
+};
+
+const GATE: &str = "admission-v1.lock";
+const JOURNAL: &str = "state-v1.journal";
+const READY: u8 = 0;
+const PENDING: u8 = 1;
+
+// CoTaskMemFree's existing crate feature is not enabled. Import this one SDK
+// function directly rather than changing dependency features or the lockfile.
+#[link(name = "ole32")]
+extern "system" { fn CoTaskMemFree(memory: *const std::ffi::c_void); }
+
+fn handle(file: &File) -> HANDLE { HANDLE(file.as_raw_handle()) }
+fn wide(path: &Path) -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() }
+struct Token(HANDLE);
+impl Drop for Token { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.0); } } }
+struct Descriptor(PSECURITY_DESCRIPTOR);
+impl Drop for Descriptor { fn drop(&mut self) { unsafe { let _ = LocalFree(Some(HLOCAL(self.0.0))); } } }
+struct User(Vec<usize>);
+impl User {
+    fn current() -> Result<Self, Error> {
+        let mut token = Token(HANDLE::default());
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token.0) }.map_err(|_| Error::Untrusted)?;
+        let mut size = 0;
+        let _ = unsafe { GetTokenInformation(token.0, TokenUser, None, 0, &mut size) };
+        if size == 0 || size > 64 * 1024 { return Err(Error::Untrusted); }
+        let mut buffer = vec![0usize; (size as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()];
+        unsafe { GetTokenInformation(token.0, TokenUser, Some(buffer.as_mut_ptr().cast()), size, &mut size) }.map_err(|_| Error::Untrusted)?;
+        Ok(Self(buffer))
+    }
+    fn sid(&self) -> PSID { unsafe { (*(self.0.as_ptr().cast::<TOKEN_USER>())).User.Sid } }
+}
+fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> bool {
+    if sid.0.is_null() { return false; }
+    unsafe {
+        IsWellKnownSid(sid, WinLocalSystemSid).as_bool()
+            || IsWellKnownSid(sid, WinBuiltinAdministratorsSid).as_bool()
+            || (product == Product::SupportConsole && EqualSid(sid, user.sid()).is_ok())
+    }
+}
+
+fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor: bool) -> Result<(), Error> {
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(handle(file), &mut information) }.map_err(|_| Error::Untrusted)?;
+    if information.dwFileAttributes & 0x400 != 0
+        || (information.dwFileAttributes & 0x10 != 0) != directory
+        || (!directory && information.nNumberOfLinks != 1)
+    { return Err(Error::Untrusted); }
+    let mut owner = PSID::default();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut descriptor = Descriptor(PSECURITY_DESCRIPTOR::default());
+    let result = unsafe {
+        GetSecurityInfo(handle(file), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            Some(&mut owner), None, Some(&mut dacl), None, Some(&mut descriptor.0))
+    };
+    if result.0 != 0 || descriptor.0.0.is_null() || dacl.is_null()
+        || !trusted_sid(owner, user, product, ancestor)
+        || (!ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err())
+    { return Err(Error::Untrusted); }
+    let mut size = ACL_SIZE_INFORMATION::default();
+    unsafe { GetAclInformation(dacl, (&mut size as *mut ACL_SIZE_INFORMATION).cast(), std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation) }.map_err(|_| Error::Untrusted)?;
+    for index in 0..size.AceCount {
+        let mut pointer = std::ptr::null_mut();
+        unsafe { GetAce(dacl, index, &mut pointer) }.map_err(|_| Error::Untrusted)?;
+        if pointer.is_null() { return Err(Error::Untrusted); }
+        let header = unsafe { &*pointer.cast::<ACE_HEADER>() };
+        if header.AceFlags & INHERIT_ONLY_ACE.0 as u8 != 0 { continue; }
+        if header.AceType == 1 { continue; } // ACCESS_DENIED_ACE_TYPE
+        if header.AceType != 0 || (header.AceSize as usize) < std::mem::size_of::<ACCESS_ALLOWED_ACE>() { return Err(Error::Untrusted); }
+        let ace = unsafe { &*pointer.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = PSID((&ace.SidStart as *const u32).cast_mut().cast());
+        // Ancestors may permit creating siblings. They must not permit replacing
+        // or reconfiguring existing protected children. The protected root and
+        // both files reject any foreign write capability.
+        let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };
+        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) { return Err(Error::Untrusted); }
+    }
+    Ok(())
+}
+
+fn open(path: &Path, writable: bool, directory: bool, create: bool) -> Result<File, Error> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(writable).create_new(create)
+        // Hold every opened ancestor without FILE_SHARE_DELETE through the
+        // lease. Neither an unprivileged rename nor a reparse swap is accepted.
+        .share_mode(1 | 2)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | if directory { FILE_FLAG_BACKUP_SEMANTICS.0 } else { 0 });
+    options.open(path).map_err(|error| if error.kind() == std::io::ErrorKind::NotFound { Error::MissingGate } else { Error::Untrusted })
+}
+fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Error> {
+    let components: Vec<_> = path.components().collect();
+    let Some(Component::Prefix(prefix)) = components.first() else { return Err(Error::Untrusted); };
+    let Prefix::Disk(letter) = prefix.kind() else { return Err(Error::Untrusted); };
+    let volume = PathBuf::from(format!("{}:\\", letter as char));
+    // No UNC, mapped network/removable drive, or reparse-mounted volume.
+    if unsafe { GetDriveTypeW(PCWSTR(wide(&volume).as_ptr())) } != 3 { return Err(Error::Untrusted); }
+    let mut current = PathBuf::new();
+    let mut held = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
+            _ => return Err(Error::Untrusted),
+        }
+        if index == 0 { continue; }
+        let file = open(&current, false, true, false)?;
+        inspect(&file, user, product, true, index + 1 < components.len())?;
+        held.push(file);
+    }
+    if held.is_empty() { return Err(Error::Untrusted); }
+    Ok(held)
+}
+fn root(product: Product) -> Result<PathBuf, Error> {
+    let id = if product == Product::CustomerDesk { &FOLDERID_ProgramData } else { &FOLDERID_LocalAppData };
+    let pointer = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.map_err(|_| Error::Untrusted)?;
+    let value = unsafe { pointer.to_string() }.map_err(|_| Error::Untrusted);
+    unsafe { CoTaskMemFree(pointer.0.cast()); }
+    let suffix = if product == Product::CustomerDesk { "OnGROW\\Support Desk Update" } else { "OnGROW\\Support Console Update" };
+    Ok(PathBuf::from(value?).join(suffix))
+}
+
+pub(super) struct Lock {
+    gate: File,
+    journal: File,
+    _directories: Vec<File>,
+    exclusive: bool,
+}
+impl Drop for Lock {
+    fn drop(&mut self) {
+        unsafe { let _ = UnlockFileEx(handle(&self.gate), None, 1, 0, &mut OVERLAPPED::default()); }
+    }
+}
+impl Lock {
+    fn state(&mut self) -> Result<u8, Error> {
+        if self.journal.metadata().map_err(|_| Error::Untrusted)?.len() != 1 { return Err(Error::Untrusted); }
+        self.journal.seek(SeekFrom::Start(0)).map_err(|_| Error::Io)?;
+        let mut value = [0];
+        self.journal.read_exact(&mut value).map_err(|_| Error::Untrusted)?;
+        if value[0] != READY && value[0] != PENDING { return Err(Error::Untrusted); }
+        Ok(value[0])
+    }
+    fn write_state(&mut self, state: u8) -> Result<(), Error> {
+        if !self.exclusive { return Err(Error::Untrusted); }
+        self.state()?;
+        self.journal.seek(SeekFrom::Start(0)).map_err(|_| Error::Io)?;
+        self.journal.write_all(&[state]).map_err(|_| Error::Io)?;
+        // File::sync_all calls FlushFileBuffers on this fixed journal handle.
+        self.journal.sync_all().map_err(|_| Error::Io)
+    }
+    pub(super) fn mark_pending(&mut self) -> Result<(), Error> {
+        if self.state()? == PENDING { return Err(Error::Pending); }
+        self.write_state(PENDING)
+    }
+    pub(super) fn mark_ready(&mut self) -> Result<(), Error> { self.write_state(READY) }
+}
+
+fn acquire(path: &Path, product: Product, exclusive: bool) -> Result<Lock, Error> {
+    let user = User::current()?;
+    let directories = directory(path, &user, product)?;
+    let gate = open(&path.join(GATE), exclusive, false, false)?;
+    inspect(&gate, &user, product, false, false)?;
+    if gate.metadata().map_err(|_| Error::Untrusted)?.len() != 0 { return Err(Error::Untrusted); }
+    let flag = LOCK_FILE_FLAGS(LOCKFILE_FAIL_IMMEDIATELY.0 | if exclusive { LOCKFILE_EXCLUSIVE_LOCK.0 } else { 0 });
+    if let Err(error) = unsafe { LockFileEx(handle(&gate), flag, None, 1, 0, &mut OVERLAPPED::default()) } {
+        return Err(if error.code().0 as u32 == 0x8007_0021 { Error::Busy } else { Error::Io });
+    }
+    let journal = open(&path.join(JOURNAL), exclusive, false, false)?;
+    inspect(&journal, &user, product, false, false)?;
+    let mut lock = Lock { gate, journal, _directories: directories, exclusive };
+    if lock.state()? == PENDING && !exclusive { return Err(Error::Pending); }
+    Ok(lock)
+}
+pub(super) fn admit(product: Product) -> Result<Lock, Error> { acquire(&root(product)?, product, false) }
+pub(super) fn exclusive(product: Product) -> Result<Lock, Error> { acquire(&root(product)?, product, true) }
+pub(super) fn initialize(product: Product) -> Result<(), Error> { initialize_at(&root(product)?, product) }
+fn initialize_at(path: &Path, product: Product) -> Result<(), Error> {
+    let user = User::current()?;
+    let _directories = directory(path, &user, product)?;
+    for name in [GATE, JOURNAL] {
+        match std::fs::symlink_metadata(path.join(name)) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            _ => return Err(Error::Untrusted),
+        }
+    }
+    let mut journal = open(&path.join(JOURNAL), true, false, true)?;
+    inspect(&journal, &user, product, false, false)?;
+    journal.write_all(&[READY]).map_err(|_| Error::Io)?;
+    journal.sync_all().map_err(|_| Error::Io)?;
+    let gate = open(&path.join(GATE), true, false, true)?;
+    inspect(&gate, &user, product, false, false)?;
+    gate.sync_all().map_err(|_| Error::Io)?;
+    Ok(())
+}
+#[cfg(test)]
+pub(super) fn fixture_initialize(path: &Path) -> Result<(), Error> { initialize_at(path, Product::SupportConsole) }
+#[cfg(test)]
+pub(super) fn fixture_acquire(path: &Path, exclusive: bool) -> Result<Lock, Error> { acquire(path, Product::SupportConsole, exclusive) }

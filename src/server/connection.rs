@@ -455,7 +455,9 @@ impl Connection {
         id: i32,
         server: super::ServerPtrWeak,
         meta: super::ConnectionMeta,
+        session_lease: crate::ongrow_update::session_gate::SessionLease,
     ) {
+        let _session_lease = session_lease;
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,

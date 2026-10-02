@@ -136,6 +136,13 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     pub async fn io_loop(&mut self, key: &str, token: &str, round: u32) {
+        let _early_session_lease = match crate::ongrow_update::session_gate::admit() {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.handler.on_establish_connection_error(error.to_string());
+                return;
+            }
+        };
         #[cfg(target_os = "windows")]
         let _file_clip_context_holder = {
             // `is_port_forward()` will not reach here, but we still check it for clarity.
@@ -178,7 +185,8 @@ impl<T: InvokeUiSession> Remote<T> {
         )
         .await
         {
-            Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+            Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server), session_lease)) => {
+                let _session_lease = session_lease;
                 self.handler
                     .connection_round_state
                     .lock()

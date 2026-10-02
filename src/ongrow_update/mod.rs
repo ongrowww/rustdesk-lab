@@ -2,6 +2,7 @@
 #![allow(dead_code)] // Not connected to an updater until trusted bootstrap exists.
 
 pub mod manifest;
+pub mod session_gate;
 
 use hbb_common::sodiumoxide::{self, crypto::sign};
 use manifest::{Channel, Manifest, Platform, Product};

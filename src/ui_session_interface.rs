@@ -1947,6 +1947,13 @@ impl<T: InvokeUiSession> Session<T> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
+    let _early_session_lease = match crate::ongrow_update::session_gate::admit() {
+        Ok(lease) => lease,
+        Err(error) => {
+            handler.on_establish_connection_error(error.to_string());
+            return;
+        }
+    };
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let (sender, receiver) = mpsc::unbounded_channel::<Data>();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1956,6 +1963,10 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
     let key = crate::get_key(false).await;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if handler.is_port_forward() {
+        // A local idle listener is not a remote session. Each accepted forward
+        // independently acquires its kernel lease in Client::start and moves it
+        // into run_forward, including tasks surviving this listener/UI scope.
+        drop(_early_session_lease);
         if handler.is_rdp() {
             let port = handler
                 .get_option("rdp_port".to_owned())
