@@ -182,10 +182,25 @@ jobs:
         run: |
           openssl_tool="$(command -v openssl)"
           test -n "$openssl_tool"
+          fixture_home="$(python3 -c 'from pathlib import Path; print(Path.home().resolve())')"
+          fixture_dir="$fixture_home/ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}"
           python3 scripts/test_ongrow_release_signing.py \
             --openssl "$openssl_tool" \
-            --export-fixtures-dir "$GITHUB_WORKSPACE/target/ongrow-release-test-fixtures"
-          test "$(find target/ongrow-release-test-fixtures -maxdepth 1 -type f | wc -l)" -eq 4
+            --export-fixtures-dir "$fixture_dir"
+          test "$(find "$fixture_dir" -maxdepth 1 -type f | wc -l)" -eq 4
+          printf 'ONGROW_PUBLIC_FIXTURE_DIR=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+
+      - name: Upload public synthetic release fixtures
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/public.key
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/manifest.json
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/manifest.sig
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/payload.bin
 
       - name: Upload bridge artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -198,10 +213,6 @@ jobs:
             ./src/bridge_generated.io.rs
             ./flutter/lib/generated_bridge.dart
             ./flutter/lib/generated_bridge.freezed.dart
-            ./target/ongrow-release-test-fixtures/public.key
-            ./target/ongrow-release-test-fixtures/manifest.json
-            ./target/ongrow-release-test-fixtures/manifest.sig
-            ./target/ongrow-release-test-fixtures/payload.bin
 
   build-windows-x64:
     needs: generate-bridge
@@ -320,6 +331,19 @@ jobs:
           name: ongrow-windows-bridge-1.4.9-${{ env.SOURCE_SHA }}
           path: ./
 
+      - name: Require absent public fixture destination
+        shell: pwsh
+        run: |
+          $fixtureDir = Join-Path $env:RUNNER_TEMP "ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}"
+          if (Test-Path -LiteralPath $fixtureDir) { throw "Public fixture destination already exists" }
+          "ONGROW_PUBLIC_FIXTURE_DIR=$fixtureDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore public synthetic release fixtures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}
+
       - name: Setup vcpkg with GitHub Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
         with:
@@ -339,7 +363,7 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
-          $env:ONGROW_RELEASE_TEST_FIXTURE_DIR = (Resolve-Path "target/ongrow-release-test-fixtures").Path
+          $env:ONGROW_RELEASE_TEST_FIXTURE_DIR = (Resolve-Path -LiteralPath $env:ONGROW_PUBLIC_FIXTURE_DIR).Path
           foreach ($name in @('public.key', 'manifest.json', 'manifest.sig', 'payload.bin')) {
             if (-not (Test-Path (Join-Path $env:ONGROW_RELEASE_TEST_FIXTURE_DIR $name) -PathType Leaf)) { throw "Public release fixture missing" }
           }

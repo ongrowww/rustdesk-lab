@@ -260,11 +260,17 @@ die frühe CLI-Reihenfolge. Sie sind kein ausgeführter Plattform-Lifecycle-Test
 Der vorbereitete native Windows-Console-Labworkflow führt nach Erzeugung der
 Bridge-Dateien aus. Im Linux-Bridgejob testet er den Produzenten mit echtem,
 vorhandenem OpenSSL 3 und exportiert ausschließlich vier öffentliche
-synthetische Dateien unter dem ignorierten `target/ongrow-release-test-fixtures`:
+synthetische Dateien in einem neuen, exklusiven Laufverzeichnis unter dem
+kanonischen Home-Pfad, außerhalb von Checkout und Rust-Cache:
 `public.key`, `manifest.json`, `manifest.sig` und `payload.bin`.
-Nur diese vier zusätzlichen Dateien werden im Bridge-Artefakt transportiert,
-niemals der private synthetische Schlüssel. Der Windowsjob setzt
-`ONGROW_RELEASE_TEST_FIXTURE_DIR` im Rust-Teststep und braucht kein OpenSSL.
+Der Verzeichnisname enthält Run-ID und Run-Versuch. Bestehende Ziele werden
+abgelehnt, nicht gelöscht oder überschrieben. Die bestehenden Eigentümer-,
+Pfad- und Rechteprüfungen bleiben unverändert. Nur diese vier expliziten
+Dateipfade werden in einem eigenen öffentlichen Fixture-Artefakt transportiert,
+niemals der private synthetische Schlüssel. Das Bridge-Artefakt enthält weiter
+nur Bridge-Dateien mit unverändertem Verzeichnislayout. Der Windowsjob lädt
+die Fixtures in ein zuvor nicht vorhandenes Laufverzeichnis unter `runner.temp`,
+setzt `ONGROW_RELEASE_TEST_FIXTURE_DIR` im Rust-Teststep und braucht kein OpenSSL.
 
 ```sh
 cargo test --locked --lib --features flutter ongrow_update
