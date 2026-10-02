@@ -1,0 +1,6 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- The generator replaces this skeleton. Never harvest the old RustDesk MSI. -->
+  <Package Name="UNGENERATED" Manufacturer="OnGROW GmbH" Version="0.0.1" UpgradeCode="00000000-0000-0000-0000-000000000000" Scope="perUser">
+    <Launch Condition="0" Message="Generate an OnGROW package before compiling." />
+  </Package>
+</Wix>
