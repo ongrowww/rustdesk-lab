@@ -18,14 +18,42 @@ $installer = New-Object -ComObject WindowsInstaller.Installer
 function Read-Rows($Database, [string]$Sql, [string[]]$Columns) {
     $view = $Database.OpenView($Sql)
     try {
-        $view.Execute()
+        $null = $view.Execute()
         while ($null -ne ($record = $view.Fetch())) {
             $values = [ordered]@{}
             for ($i = 0; $i -lt $Columns.Count; $i++) { $values[$Columns[$i]] = $record.StringData($i + 1) }
             [PSCustomObject]$values
         }
-    } finally { $view.Close() }
+    } finally { $null = $view.Close() }
 }
+
+function Assert-ReadRowsContract {
+    # Exercise the actual query adapter without COM or any installation. These
+    # methods deliberately return non-row values, as COM automation may do.
+    $record = [PSCustomObject]@{}
+    Add-Member -InputObject $record -MemberType ScriptMethod -Name StringData -Value {
+        param([int]$Index)
+        if ($Index -eq 1) { return 'fixture-name' }
+        if ($Index -eq 2) { return 'fixture-value' }
+        throw 'Unexpected fixture column'
+    }
+    $view = [PSCustomObject]@{ Reads = 0; Row = $record; Closed = $false }
+    Add-Member -InputObject $view -MemberType ScriptMethod -Name Execute -Value { return 71 }
+    Add-Member -InputObject $view -MemberType ScriptMethod -Name Close -Value { $this.Closed = $true; return 72 }
+    Add-Member -InputObject $view -MemberType ScriptMethod -Name Fetch -Value {
+        if ($this.Reads -eq 0) { $this.Reads++; return $this.Row }
+        return $null
+    }
+    $database = [PSCustomObject]@{ View = $view }
+    Add-Member -InputObject $database -MemberType ScriptMethod -Name OpenView -Value { param([string]$Sql); return $this.View }
+    $rows = @(Read-Rows $database 'synthetic query only' @('Name','Value'))
+    if ($rows.Count -ne 1 -or $rows[0] -isnot [PSCustomObject] -or
+        (@($rows[0].PSObject.Properties.Name) -join ',') -ne 'Name,Value' -or
+        $rows[0].Name -ne 'fixture-name' -or $rows[0].Value -ne 'fixture-value' -or -not $view.Closed) {
+        throw 'Read-Rows returned non-row output or changed requested columns'
+    }
+}
+Assert-ReadRowsContract
 
 function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Sequence) {
     $db = $installer.OpenDatabase($Msi, 0)
