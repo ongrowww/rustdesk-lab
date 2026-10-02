@@ -2,6 +2,18 @@ name: OnGROW Support Desk - Windows x64 Lab
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/ongrow-lab-windows-x64.yml"
+      - "Cargo.toml"
+      - "libs/portable/**"
+      - "scripts/*ongrow*setup*"
+      - "scripts/*ongrow*product*"
+      - "scripts/test_ongrow_ci_isolation.py"
+      - "src/ongrow_ci.rs"
+      - "flutter/windows/**"
+      - "flutter/packages/ongrow_support_ui/**"
+      - "docs/ongrow-windows-lab.md"
 
 permissions:
   contents: read
@@ -11,6 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  SOURCE_SHA: "${{ github.event.pull_request.head.sha || github.sha }}"
   VERSION: "1.4.9"
   BRIDGE_RUST_VERSION: "1.75"
   WINDOWS_RUST_VERSION: "1.75"
@@ -29,13 +42,14 @@ env:
 
 jobs:
   generate-bridge:
+    if: github.repository == 'ongrowww/rustdesk-lab' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
       - name: Checkout source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           submodules: recursive
           persist-credentials: false
 
@@ -60,7 +74,7 @@ jobs:
       - name: Verify source revision
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" = "$VERSION"
 
       - name: Install prerequisites
@@ -142,6 +156,7 @@ jobs:
             ./flutter/lib/generated_bridge.freezed.dart
 
   build-windows-x64:
+    if: github.repository == 'ongrowww/rustdesk-lab' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     needs: generate-bridge
     runs-on: windows-2022
     timeout-minutes: 180
@@ -156,7 +171,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           submodules: recursive
           persist-credentials: false
 
@@ -190,6 +205,8 @@ jobs:
               return subprocess.check_output(["git", *args], text=True).strip()
 
           key = base64.b64decode(os.environ["ONGROW_HBBS_PUBLIC_KEY"], validate=True)
+          if git('rev-parse', 'HEAD') != os.environ['SOURCE_SHA']:
+              raise SystemExit('Source revision mismatch before provenance')
           with open("ongrow-build-provenance.txt", "w", encoding="utf-8") as output:
               output.write(f"source={git('rev-parse', 'HEAD')}\n")
               output.write(f"submodules={git('submodule', 'status', '--recursive').replace(chr(10), ';')}\n")
@@ -201,7 +218,7 @@ jobs:
       - name: Verify source revision and runner architecture
         shell: pwsh
         run: |
-          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw "Source revision mismatch" }
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw "Source revision mismatch" }
           if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") { throw "Expected AMD64 runner" }
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches.Groups[1].Value
           if ($version -ne $env:VERSION) { throw "Version mismatch" }
@@ -273,13 +290,22 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          cargo metadata --locked --filter-platform x86_64-pc-windows-msvc --format-version 1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Root Cargo.lock resolution failed" }
           python scripts/test_ongrow_ci_isolation.py
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation Python tests failed" }
           cargo test --locked --lib --features flutter ongrow_ci
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW CI isolation Rust tests failed" }
           cargo test --locked --lib --features flutter ongrow_control
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW control tests failed" }
           cargo test --locked --lib --features flutter ui_interface::tests
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW UI interface tests failed" }
           cargo test --locked --lib --features flutter uninstall_candidates
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW uninstall identity tests failed" }
           cargo test --locked --lib --features flutter service_commands
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW service identity tests failed" }
           cargo test --locked --lib --features flutter broker_process_identity
+          if ($LASTEXITCODE -ne 0) { throw "OnGROW broker identity tests failed" }
 
       - name: Build unsigned Windows x64 customer desk
         shell: pwsh
@@ -352,12 +378,47 @@ jobs:
           New-Item -ItemType Directory -Force -Path $artifact | Out-Null
           Copy-Item -Recurse -Force "$release/*" $artifact
           Copy-Item ongrow-build-provenance.txt $artifact
+          Copy-Item LICENCE $artifact
           $stagedExe = Join-Path $artifact "OnGROW Support Desk.exe"
           $digest = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$digest  OnGROW Support Desk.exe" | Set-Content -Encoding ascii (Join-Path $artifact "OnGROW Support Desk.exe.sha256")
           $recorded = ((Get-Content (Join-Path $artifact "OnGROW Support Desk.exe.sha256")) -split " ")[0]
           $actual = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($recorded -ne $actual) { throw "Staged executable checksum mismatch" }
+
+      - name: Test and package complete unsigned Setup
+        shell: pwsh
+        run: |
+          python scripts/test_ongrow_windows_console_product.py
+          if ($LASTEXITCODE -ne 0) { throw "Console isolation checks failed" }
+          python scripts/test_ongrow_windows_setup.py
+          if ($LASTEXITCODE -ne 0) { throw "Setup packaging tests failed" }
+          cargo test --locked --manifest-path libs/portable/Cargo.toml --features ongrow-support-desk
+          if ($LASTEXITCODE -ne 0) { throw "Packer tests failed with pinned Windows Rust" }
+          python -m pip install -r libs/portable/requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "Packer compression dependency unavailable" }
+          python scripts/package_ongrow_windows_setup.py `
+            --source "dist/$env:ARTIFACT_NAME" `
+            --output "dist/ongrow-support-desk-setup-unsigned-lab" `
+            --version "$env:VERSION" --source-sha "$env:SOURCE_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "Setup packaging failed" }
+
+      - name: Verify actual Setup payload offline
+        shell: pwsh
+        env:
+          ONGROW_CI_SMOKE_TEST: "1"
+        run: |
+          ./scripts/test_ongrow_windows_setup_payload.ps1 `
+            -SetupDirectory "dist/ongrow-support-desk-setup-unsigned-lab" `
+            -SourceSha "$env:SOURCE_SHA" -Version "$env:VERSION" -TimeoutSeconds 60
+
+      - name: Upload unsigned Windows x64 Setup lab artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ongrow-support-desk-1.4.9-windows-x64-setup-unsigned-lab
+          retention-days: 7
+          if-no-files-found: error
+          path: dist/ongrow-support-desk-setup-unsigned-lab/
 
       - name: Upload unsigned Windows x64 lab artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
