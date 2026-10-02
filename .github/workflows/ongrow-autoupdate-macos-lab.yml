@@ -44,5 +44,17 @@ jobs:
           curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-for-Swift-Package-Manager.zip -o "$RUNNER_TEMP/sparkle-spm.zip"
           echo "17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959  $RUNNER_TEMP/sparkle-spm.zip" | shasum -a 256 -c -
           tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle-tools"
+      - name: Checkout exact upstream CLI source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: sparkle-project/Sparkle
+          ref: eef1a539a373c1f1a320624b1130fc5de7b2e100
+          path: .sparkle-source
+          persist-credentials: false
+      - name: Build only the official pinned CLI scheme
+        run: |
+          test "$(git -C .sparkle-source rev-parse HEAD)" = "eef1a539a373c1f1a320624b1130fc5de7b2e100"
+          xcodebuild -project .sparkle-source/Sparkle.xcodeproj -scheme sparkle-cli -configuration Release -derivedDataPath "$RUNNER_TEMP/sparkle-cli-build" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
+          test -x "$RUNNER_TEMP/sparkle-cli-build/Build/Products/Release/sparkle.app/Contents/MacOS/sparkle"
       - name: Real signed download, replacement and rejection cases
-        run: python3 scripts/test_ongrow_sparkle_probe.py --integration "$RUNNER_TEMP/sparkle-tools"
+        run: python3 scripts/test_ongrow_sparkle_probe.py --integration "$RUNNER_TEMP/sparkle-tools" --cli-app "$RUNNER_TEMP/sparkle-cli-build/Build/Products/Release/sparkle.app"

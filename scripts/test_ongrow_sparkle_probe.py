@@ -18,6 +18,35 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_sparkle_probe"
 TAR_SHA256 = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
 SPM_SHA256 = "17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959"
+SPARKLE_COMMIT = "eef1a539a373c1f1a320624b1130fc5de7b2e100"
+
+
+def distribution_paths(distribution):
+    framework = distribution / "Sparkle.framework"
+    signer = distribution / "bin/sign_update"
+    info = framework / "Versions/B/Resources/Info.plist"
+    if not framework.is_dir() or framework.is_symlink() or not info.is_file():
+        raise RuntimeError("pinned distribution framework layout missing")
+    if not signer.is_file() or signer.is_symlink() or not os.access(signer, os.X_OK):
+        raise RuntimeError("pinned distribution sign_update layout missing")
+    if plistlib.loads(info.read_bytes()).get("CFBundleShortVersionString") != "2.10.0":
+        raise RuntimeError("pinned distribution framework version mismatch")
+    return framework, signer
+
+
+def validate_cli_app(app):
+    cli = app / "Contents/MacOS/sparkle"
+    info = app / "Contents/Info.plist"
+    if app.is_symlink() or not info.is_file() or not cli.is_file() or cli.is_symlink() or not os.access(cli, os.X_OK):
+        raise RuntimeError("explicit built CLI application layout missing")
+    if plistlib.loads(info.read_bytes()).get("CFBundleIdentifier") != "org.sparkle-project.sparkle-cli":
+        raise RuntimeError("explicit built CLI application identity mismatch")
+    framework = app / "Contents/Frameworks/Sparkle.framework"
+    framework_info = framework / "Versions/B/Resources/Info.plist"
+    if framework.is_symlink() or not framework_info.is_file() or plistlib.loads(
+            framework_info.read_bytes()).get("CFBundleShortVersionString") != "2.10.0":
+        raise RuntimeError("explicit built CLI framework version mismatch")
+    return cli
 
 
 def run(*args, capture=False):
@@ -63,16 +92,15 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def integration(distribution):
+def integration(distribution, cli_app):
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "macOS":
         raise RuntimeError("real replacement is allowed only on the disposable macOS CI runner")
     distribution = distribution.resolve(strict=True)
-    framework = distribution / "Sparkle.framework"
-    signer = distribution / "bin/sign_update"
-    cli = distribution / "bin/sparkle.app/Contents/MacOS/sparkle"
-    for path in (framework, signer, cli):
-        if not path.exists():
-            raise RuntimeError(f"pinned distribution layout missing: {path.name}")
+    framework, signer = distribution_paths(distribution)
+    expected_cli_app = Path(os.environ["RUNNER_TEMP"]) / "sparkle-cli-build/Build/Products/Release/sparkle.app"
+    if cli_app.resolve(strict=True) != expected_cli_app.resolve(strict=True):
+        raise RuntimeError("CLI application is not the explicitly built runner output")
+    validate_cli_app(cli_app)
     with tempfile.TemporaryDirectory(prefix="ongrow-sparkle-probe-", dir=os.environ["RUNNER_TEMP"]) as directory:
         task = Path(directory)
         task.chmod(0o700)
@@ -81,6 +109,22 @@ def integration(distribution):
         run(task / "keys", task / "wrong.key", task / "wrong-public.key")
         key = (task / "public.key").read_text()
         sign_framework(framework)
+        # The CLI target builds the same pinned source framework as a dependency.
+        # Run the test against the checksummed release framework instead. Only
+        # replace a copy owned by this fresh CI fixture directory.
+        owned_cli_app = task / "sparkle.app"
+        shutil.copytree(cli_app, owned_cli_app, symlinks=True)
+        copied_framework = owned_cli_app / "Contents/Frameworks/Sparkle.framework"
+        if copied_framework.is_symlink() or not copied_framework.is_dir():
+            raise RuntimeError("owned copied CLI framework layout rejected")
+        shutil.rmtree(copied_framework)
+        shutil.copytree(framework, copied_framework, symlinks=True)
+        release_binary = (framework / "Versions/B/Sparkle").read_bytes()
+        if (copied_framework / "Versions/B/Sparkle").read_bytes() != release_binary:
+            raise RuntimeError("CLI is not using the verified distribution framework")
+        run("codesign", "--force", "--sign", "-", "--timestamp=none", owned_cli_app)
+        run("codesign", "--verify", "--deep", "--strict", owned_cli_app)
+        cli = validate_cli_app(owned_cli_app)
         for version in (0, 1, 2):
             run("xcrun", "swiftc", "-parse-as-library", "-target", "arm64-apple-macosx12.3",
                 "-D", f"PROBE_V{version}", "-F", distribution, "-framework", "Sparkle", "-Xlinker", "-rpath",
@@ -154,6 +198,57 @@ def integration(distribution):
 
 
 class FixtureTests(unittest.TestCase):
+    def distribution_fixture(self, root):
+        framework = root / "Sparkle.framework"
+        info = framework / "Versions/B/Resources/Info.plist"
+        info.parent.mkdir(parents=True)
+        info.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.10.0"}))
+        signer = root / "bin/sign_update"
+        signer.parent.mkdir(); signer.write_bytes(b"fixture"); signer.chmod(0o700)
+        return framework, signer, info
+
+    def cli_fixture(self, root):
+        app = root / "sparkle.app"
+        cli = app / "Contents/MacOS/sparkle"
+        cli.parent.mkdir(parents=True); cli.write_bytes(b"fixture"); cli.chmod(0o700)
+        info = app / "Contents/Info.plist"
+        info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "org.sparkle-project.sparkle-cli"}))
+        framework_info = app / "Contents/Frameworks/Sparkle.framework/Versions/B/Resources/Info.plist"
+        framework_info.parent.mkdir(parents=True)
+        framework_info.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.10.0"}))
+        return app, cli, info, framework_info
+
+    def test_release_has_no_cli_path_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            framework, signer, _ = self.distribution_fixture(root)
+            self.assertEqual(distribution_paths(root), (framework, signer))
+            self.assertFalse((root / "bin/sparkle.app").exists())
+
+    def test_distribution_missing_or_wrong_layout_is_rejected(self):
+        for case in ("missing-signer", "nonexecutable-signer", "wrong-version", "missing-framework", "symlink-signer"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); framework, signer, info = self.distribution_fixture(root)
+                if case == "missing-signer": signer.unlink()
+                if case == "nonexecutable-signer": signer.chmod(0o600)
+                if case == "wrong-version": info.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.9.3"}))
+                if case == "missing-framework": shutil.rmtree(framework)
+                if case == "symlink-signer":
+                    external = root / "external"; signer.rename(external); signer.symlink_to(external)
+                with self.assertRaises(RuntimeError): distribution_paths(root)
+
+    def test_cli_requires_exact_application_identity_and_framework(self):
+        for case in ("valid", "missing-binary", "wrong-identity", "wrong-framework", "nonexecutable-binary"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                app, cli, info, framework_info = self.cli_fixture(Path(directory))
+                if case == "missing-binary": cli.unlink()
+                if case == "nonexecutable-binary": cli.chmod(0o600)
+                if case == "wrong-identity": info.write_bytes(plistlib.dumps({"CFBundleIdentifier": "foreign"}))
+                if case == "wrong-framework": framework_info.write_bytes(plistlib.dumps({"CFBundleShortVersionString": "2.9.3"}))
+                if case == "valid": self.assertEqual(validate_cli_app(app), cli)
+                else:
+                    with self.assertRaises(RuntimeError): validate_cli_app(app)
+
     def test_fixture_has_no_rustdesk_or_permission_code(self):
         code = (FIXTURE / "main.swift").read_text()
         self.assertIn('"--marker"', code)
@@ -180,6 +275,10 @@ class FixtureTests(unittest.TestCase):
         code = (ROOT / ".github/workflows/ongrow-autoupdate-macos-lab.yml").read_text()
         self.assertIn(TAR_SHA256, code)
         self.assertIn(SPM_SHA256, code)
+        self.assertIn(SPARKLE_COMMIT, code)
+        self.assertIn('-scheme sparkle-cli', code)
+        self.assertIn('test "$(git -C .sparkle-source rev-parse HEAD)" =', code)
+        self.assertNotIn('make release', code)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", code)
         self.assertIn("contents: read", code)
         self.assertNotIn("secrets.", code)
@@ -190,8 +289,11 @@ class FixtureTests(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--integration", type=Path)
+    parser.add_argument("--cli-app", type=Path)
     args, remaining = parser.parse_known_args()
     if args.integration:
-        integration(args.integration)
+        if args.cli_app is None:
+            parser.error("--integration requires explicit --cli-app")
+        integration(args.integration, args.cli_app)
     else:
         unittest.main(argv=[__file__, *remaining])

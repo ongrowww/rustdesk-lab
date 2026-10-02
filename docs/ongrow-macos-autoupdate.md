@@ -58,6 +58,17 @@ The dedicated macOS 14 workflow uses checksummed Sparkle tools, distinct
 ephemeral file-based 0600 keys. Its HTTP server listens only on loopback. HTTP
 is allowed only in the fixture, never in a production profile.
 
+Sparkle 2.10.0's release archive does not contain `sparkle-cli`. CI separately
+checks out exact commit `eef1a539a373c1f1a320624b1130fc5de7b2e100`, verifies
+HEAD and builds only the official `sparkle-cli` scheme. Its output must be
+`$RUNNER_TEMP/sparkle-cli-build/Build/Products/Release/sparkle.app`.
+There is no search or fallback executable. The CLI's copied embedded framework
+is replaced, only within the newly owned fixture directory, by the verified
+2.10.0 distribution framework. Version and framework binary bytes must match
+before the copied CLI is ad-hoc signed and verified. The probe and controller
+typecheck use that same release framework. No `make release`, packaging script,
+global installation or local source build runs.
+
 The actual Sparkle CLI downloads and replaces probe v1 with signed v2. Tests
 inspect the installed bundle, run a distinct compiled executable marker,
 compare the installed executable's byte hash and verify an
