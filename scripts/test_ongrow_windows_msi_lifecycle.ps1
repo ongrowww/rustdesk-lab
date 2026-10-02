@@ -117,6 +117,24 @@ function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Seque
     $expectedParent = if ($Product -eq 'customer-desk') { 'ProgramFiles64Folder' } else { 'OnGrowFolder' }
     if ($install.Parent -ne $expectedParent) { throw 'Package install root mismatch' }
     if ($Probe -and (($dirs.Name -join '|') -match 'OnGROW Support (Desk|Console)')) { throw 'Probe contains customer paths' }
+    $removeFiles = @(if ($tableNames -contains 'RemoveFile') { Read-Rows $db 'SELECT `Component_`, `FileName`, `DirProperty`, `InstallMode` FROM `RemoveFile`' @('Component','FileName','Directory','Mode') })
+    if ($Product -eq 'support-console') {
+        if ($tableNames -notcontains 'RemoveFile') { throw 'Console empty-folder cleanup missing' }
+        # StringData alone cannot distinguish NULL from an empty string. Check SQL NULL explicitly.
+        $namedRemovals = @(Read-Rows $db 'SELECT `FileKey` FROM `RemoveFile` WHERE `FileName` IS NOT NULL' @('Id'))
+        if ($namedRemovals.Count -ne 0) { throw 'Console cleanup must not remove files or wildcards' }
+        $cleanupDirs = @('ProgramsFolder','OnGrowFolder','INSTALLFOLDER')
+        for ($i = 0; $i -lt $cleanupDirs.Count; $i++) {
+            foreach ($child in ($dirs | Where-Object Parent -eq $cleanupDirs[$i])) {
+                if ($cleanupDirs -notcontains $child.Id) { $cleanupDirs += $child.Id }
+            }
+        }
+        if ($removeFiles.Count -ne $cleanupDirs.Count) { throw 'Console empty-folder cleanup count mismatch' }
+        foreach ($directory in $cleanupDirs) {
+            $rows = @($removeFiles | Where-Object Directory -eq $directory)
+            if ($rows.Count -ne 1 -or $rows[0].Component -ne 'OwnPackageRegistry' -or $rows[0].FileName -ne '' -or $rows[0].Mode -ne '2') { throw 'Wrong console empty-folder uninstall declaration' }
+        }
+    } elseif ($removeFiles.Count -ne 0) { throw 'Desk gained console profile cleanup' }
     return $props.ProductCode
 }
 
@@ -169,11 +187,22 @@ foreach ($product in @('customer-desk','support-console')) {
     $sameVersionMsi = Join-Path $sameVersionOutput 'bin/Release/OnGROW.msi'
     $sameVersionCode = Assert-Tables $sameVersionMsi $product $true 2
     if ($sameVersionCode -eq $codes[2]) { throw 'Same-version test does not change package identity' }
+    $sharedSentinels = @(if ($product -eq 'support-console') {
+        [PSCustomObject]@{ Path = (Join-Path $env:LOCALAPPDATA 'Programs/ongrow-msi-probe-shared-programs-sentinel.txt'); Content = 'foreign-programs-sentinel'; Created = $false }
+        [PSCustomObject]@{ Path = (Join-Path $env:LOCALAPPDATA 'Programs/OnGROW/ongrow-msi-probe-shared-ongrow-sentinel.txt'); Content = 'foreign-ongrow-sentinel'; Created = $false }
+    })
+    function Assert-SharedSentinels {
+        foreach ($item in $sharedSentinels) {
+            if (-not (Test-Path ([IO.Path]::GetDirectoryName($item.Path)) -PathType Container) -or
+                -not $item.Created -or [IO.File]::ReadAllText($item.Path) -ne $item.Content) { throw 'Console transaction changed shared directory data' }
+        }
+    }
     function Assert-ProbeVersion([int]$Version) {
         if ((Get-ItemProperty $reg).Sequence -ne "$Version" -or (Get-ItemProperty $reg).Version -ne "0.0.$Version") { throw 'Installed registry version mismatch' }
         if ([IO.File]::ReadAllText((Join-Path $install 'probe-version.txt')) -ne "$Version") { throw 'Installed data version mismatch' }
         if ((Get-Item (Join-Path $install "$name.exe")).VersionInfo.FileVersion -ne "0.0.$Version.0") { throw 'Installed executable version mismatch' }
         if ([IO.File]::ReadAllText($sentinel) -ne 'device-and-grant-sentinel') { throw 'External application data changed' }
+        Assert-SharedSentinels
         if ($product -eq 'customer-desk') {
             if ((Get-Service -Name $name).Status -ne 'Running') { throw 'Probe service not running after transaction' }
             if ((Get-ItemProperty $reg).RunningVersion -ne "0.0.$Version.0") { throw 'Loaded service version mismatch after upgrade/rollback' }
@@ -182,6 +211,23 @@ foreach ($product in @('customer-desk','support-console')) {
     }
     $installed = $false
     try {
+        foreach ($item in $sharedSentinels) {
+            $parent = [IO.Path]::GetDirectoryName($item.Path)
+            # Shared parents may already contain other runner software. Never clear them.
+            foreach ($directory in @($env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs'), $parent)) {
+                if ((Test-Path $directory) -and
+                    (-not (Test-Path $directory -PathType Container) -or
+                    ([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { throw 'Shared sentinel parent is redirected or not a directory' }
+            }
+            $null = [IO.Directory]::CreateDirectory($parent)
+            $stream = [IO.File]::Open($item.Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $item.Created = $true
+            try {
+                $bytes = [Text.Encoding]::UTF8.GetBytes($item.Content)
+                $stream.Write($bytes, 0, $bytes.Length)
+            } finally { $stream.Dispose() }
+        }
+        Assert-SharedSentinels
         Invoke-Msi '/i' $packages[1] "$product-install-v1"
         $installed = $true
         Assert-ProbeVersion 1
@@ -197,12 +243,19 @@ foreach ($product in @('customer-desk','support-console')) {
         $installed = $false
         if ((Test-Path (Join-Path $install "$name.exe")) -or (Test-Path $reg) -or (Get-Service -Name $name -ErrorAction SilentlyContinue)) { throw 'Probe uninstall incomplete' }
         if ([IO.File]::ReadAllText($sentinel) -ne 'device-and-grant-sentinel') { throw 'Uninstall touched app data' }
+        Assert-SharedSentinels
     } finally {
         if ($installed) {
             # Only these exact three probe ProductCodes can ever be cleaned up.
             foreach ($v in @(3,2,1)) {
                 try { Invoke-Msi '/x' $codes[$v] "$product-cleanup-v$v" } catch { Write-Warning 'Probe cleanup failed or product absent; runner is disposable' }
             }
+        }
+        foreach ($item in $sharedSentinels) {
+            # Delete only files this run created exclusively; never delete shared directories.
+            if ($item.Created -and (Test-Path $item.Path -PathType Leaf) -and
+                ([IO.File]::GetAttributes($item.Path) -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and
+                [IO.File]::ReadAllText($item.Path) -eq $item.Content) { [IO.File]::Delete($item.Path) }
         }
     }
 }

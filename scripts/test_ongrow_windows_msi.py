@@ -122,7 +122,30 @@ class MsiTests(unittest.TestCase):
         removals = console.findall(".//w:RemoveFolder", NS)
         self.assertTrue(removals)
         self.assertTrue(all(v.attrib["On"] == "uninstall" for v in removals))
-        self.assertTrue(all(v.attrib["Directory"] not in ("ProgramsFolder", "OnGrowFolder", "LocalAppDataFolder") for v in removals))
+        self.assertTrue(all(v.attrib["Directory"] != "LocalAppDataFolder" for v in removals))
+
+    def test_console_custom_profile_directories_have_only_empty_uninstall_cleanup(self):
+        for probe in (False, True):
+            for sequence in (1, 2):
+                files = [msi.profile("support-console", probe)["exe"], "data/nested/asset", "other/asset"]
+                tree = ET.fromstring(msi.generate("support-console", sequence, "1.4.9", SHA, files, probe))
+                custom_dirs = {d.attrib["Id"] for d in tree.findall(".//w:Directory", NS)}
+                self.assertTrue({"ProgramsFolder", "OnGrowFolder", "INSTALLFOLDER"}.issubset(custom_dirs))
+                cleanup = tree.find(".//w:Component[@Id='OwnPackageRegistry']", NS)
+                removals = cleanup.findall("w:RemoveFolder", NS)
+                self.assertEqual({r.attrib["Directory"] for r in removals}, custom_dirs)
+                self.assertEqual(len(removals), len(custom_dirs))
+                self.assertTrue(all(set(r.attrib) == {"Id", "Directory", "On"} and r.attrib["On"] == "uninstall" for r in removals))
+                self.assertNotIn("LocalAppDataFolder", {r.attrib["Directory"] for r in removals})
+                self.assertFalse(tree.findall(".//w:RemoveFile", NS))
+                self.assertFalse(tree.findall(".//w:RemoveFolderEx", NS))
+                self.assertEqual(cleanup.attrib["Guid"], msi.identity("support-console", "package-registry", probe))
+                expected_shared = {msi.identifier("r", "shared/" + d): d for d in ("ProgramsFolder", "OnGrowFolder")}
+                self.assertEqual({r.attrib["Id"]: r.attrib["Directory"] for r in removals if r.attrib["Directory"] in expected_shared.values()}, expected_shared)
+            desk = self.tree("customer-desk", probe=probe)
+            self.assertFalse(desk.findall(".//w:RemoveFolder", NS))
+            self.assertFalse(desk.findall(".//w:RemoveFile", NS))
+            self.assertFalse(desk.findall(".//w:RemoveFolderEx", NS))
 
     def test_probe_never_shares_identity_paths_service_uri(self):
         for product in msi.PROFILES:

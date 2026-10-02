@@ -33,6 +33,13 @@ are not read, migrated or removed. A non-MSI executable or legacy uninstall
 registration at the product target blocks silent installation before mutation.
 Legacy migration requires a separate trusted bootstrap; do not bypass that guard.
 
+Console custom profile directories, including the shared `Programs` and `OnGROW`
+ancestors, have uninstall-only `RemoveFolder` rows tied to its owned package
+registry component. These compile to `RemoveFile` rows with NULL `FileName` and
+mode 2, which remove only empty folders. They cannot delete any files or nonempty
+shared directory; `LocalAppDataFolder` itself is never a cleanup target. There is
+no wildcard file removal, recursive removal or ICE64 suppression.
+
 The bounded positive release counter is encoded losslessly as
 `floor(sequence/16777216).floor(sequence/65536)%256.sequence%65536`.
 Range: 1 through 4,294,967,295; MSI bounds: 255.255.65535. Thus release order does
@@ -74,6 +81,14 @@ absent tables and present tables with zero, one and three synthetic rows, exact
 columns/content and view closure before any installer transaction. The portable
 structural regression checks that these outer array expressions remain intact;
 it does not execute PowerShell or prove native lifecycle success.
+Run `37001581804` passed that adapter regression and the Desk schema checks, then
+Console compilation rejected missing shared-ancestor cleanup with ICE64. The
+revision adds empty-only declarations for those ancestors. Native inspection
+checks NULL filenames, owned component, exact directory coverage and uninstall
+mode. Two foreign sentinels in the shared ancestors must survive Console install,
+upgrade, failed-update rollback, downgrade rejection and uninstall. Fixture cleanup
+deletes only its exclusively created, unchanged sentinel files, never the shared
+directories. Native lifecycle success remains unproven until the revised CI passes.
 Mac Python PASS is not native Windows PASS. This layer also does not prove real
 Desk service health, user-session exclusion, protected update staging, signed
 manifest consumption or end-to-end automatic installation.
@@ -81,4 +96,6 @@ manifest consumption or end-to-end automatic installation.
 References: [WiX MajorUpgrade](https://docs.firegiant.com/wix/schema/wxs/majorupgrade/),
 [ServiceControl](https://docs.firegiant.com/wix/schema/wxs/servicecontrol/),
 [Windows Installer rollback](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-installation),
+[ICE64](https://learn.microsoft.com/en-us/windows/win32/msi/ice64),
+[RemoveFile table](https://learn.microsoft.com/en-us/windows/win32/msi/removefile-table),
 [PowerShell array subexpression](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_arrays#the-array-subexpression-operator).

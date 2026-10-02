@@ -221,10 +221,12 @@ def generate(product, sequence, upstream, sha, files, probe=False):
         xml(registry, "RegistryValue", Root=hive, Key=p["registry"], Name="RunningVersion", Type="string", Value="not-started")
     refs.append("OwnPackageRegistry")
     if product == "support-console":
-        # Remove only empty owned directories, never recursive appdata cleanup.
-        # Shared Programs/OnGROW ancestors deliberately remain unowned.
+        # MSI ICE64 also requires custom shared profile ancestors in RemoveFile.
+        # RemoveFolder emits NULL FileName: only empty folders, never their files.
         for key, directory in dirs.items():
             xml(registry, "RemoveFolder", Id=identifier("r", key or "install"), Directory=directory.attrib["Id"], On="uninstall")
+        for directory in ("ProgramsFolder", "OnGrowFolder"):
+            xml(registry, "RemoveFolder", Id=identifier("r", "shared/" + directory), Directory=directory, On="uninstall")
         uri = xml(install, "Component", Id="OwnConsoleUri", Guid=identity(product, "uri", probe), Bitness="always64")
         key = "Software\\Classes\\" + p["uri"]
         xml(uri, "RegistryValue", Root="HKCU", Key=key, Name="URL Protocol", Type="string", Value="", KeyPath="yes")
