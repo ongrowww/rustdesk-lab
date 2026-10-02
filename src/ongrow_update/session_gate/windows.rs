@@ -75,6 +75,114 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> boo
     }
 }
 
+// Read-only diagnostics. Nothing in this module is available to product code.
+#[cfg(all(test, ongrow_session_gate_probe))]
+mod owner_diagnostics {
+    use super::*;
+    use windows::{core::{w, BOOL, PWSTR}, Win32::Security::{
+        Authorization::ConvertStringSidToSidW, IsValidSid, SID_NAME_USE,
+        WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
+    }};
+
+    // Microsoft WinBase.h declares this local-only API since Windows 7. It is
+    // not exposed by our existing windows crate metadata. No remote parameter,
+    // LookupAccountNameW fallback, new dependency or account-name output.
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn LookupAccountNameLocalW(account: PCWSTR, sid: PSID, sid_size: *mut u32,
+            domain: PWSTR, domain_size: *mut u32, kind: *mut SID_NAME_USE) -> BOOL;
+    }
+
+    struct LocalSid(Vec<usize>);
+    impl LocalSid {
+        fn sid(&self) -> PSID { PSID(self.0.as_ptr().cast_mut().cast()) }
+    }
+    fn trusted_installer() -> Option<LocalSid> {
+        let mut sid_size = 0;
+        let mut domain_size = 0;
+        let mut kind = SID_NAME_USE::default();
+        unsafe { LookupAccountNameLocalW(w!("NT SERVICE\\TrustedInstaller"), PSID::default(),
+            &mut sid_size, PWSTR::null(), &mut domain_size, &mut kind); }
+        if sid_size == 0 || sid_size > 68 || domain_size == 0 || domain_size > 256 { return None; }
+        let sid = LocalSid(vec![0usize; (sid_size as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()]);
+        let capacity = sid.0.len() * std::mem::size_of::<usize>();
+        // Do not assume whether a successful API reports a count including the
+        // terminator. Bound the count and require an actually written NUL.
+        let mut domain = vec![0xffffu16; domain_size as usize];
+        if !unsafe { LookupAccountNameLocalW(w!("NT SERVICE\\TrustedInstaller"), sid.sid(),
+            &mut sid_size, PWSTR(domain.as_mut_ptr()), &mut domain_size, &mut kind) }.as_bool()
+            || sid_size == 0 || sid_size as usize > capacity || domain_size as usize > domain.len()
+            || !domain.contains(&0) || !unsafe { IsValidSid(sid.sid()) }.as_bool()
+        { return None; }
+        // Both buffers stay in this test process. Neither is formatted or logged.
+        Some(sid)
+    }
+    struct AllocatedSid(PSID);
+    impl Drop for AllocatedSid {
+        fn drop(&mut self) { unsafe { let _ = LocalFree(Some(HLOCAL(self.0.0))); } }
+    }
+    fn all_services() -> Option<AllocatedSid> {
+        let mut value = AllocatedSid(PSID::default());
+        // Exact public All Services identity, not a prefix match for services.
+        unsafe { ConvertStringSidToSidW(w!("S-1-5-80-0"), &mut value.0) }.ok()?;
+        if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
+        Some(value)
+    }
+    fn classify(sid: PSID, user: &User) -> &'static str {
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return "other"; }
+        if unsafe { IsWellKnownSid(sid, WinLocalSystemSid) }.as_bool() { return "system"; }
+        if unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) }.as_bool() { return "admins"; }
+        for (kind, category) in [(WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"),
+            (WinCreatorOwnerSid, "creator-owner"), (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service")] {
+            if unsafe { IsWellKnownSid(sid, kind) }.as_bool() { return category; }
+        }
+        if unsafe { EqualSid(sid, user.sid()) }.is_ok() { return "current-user"; }
+        if let Some(services) = all_services() {
+            if unsafe { EqualSid(sid, services.0) }.is_ok() { return "all-services"; }
+        }
+        match trusted_installer() {
+            Some(installer) if unsafe { EqualSid(sid, installer.sid()) }.is_ok() => "trusted-installer",
+            Some(_) => "other",
+            None => {
+                eprintln!("ONGROW_GATE_OWNER_LOOKUP:lookup-unavailable");
+                "other"
+            }
+        }
+    }
+    pub(super) fn rejected(sid: PSID, user: &User) {
+        eprintln!("ONGROW_GATE_OWNER:{}", classify(sid, user));
+    }
+
+    #[test]
+    fn diagnostic_categories_never_grant_service_trust() {
+        use windows::Win32::Security::{CreateWellKnownSid, WinNullSid};
+        let user = User::current().unwrap();
+        let installer = trusted_installer().expect("fixed local service lookup unavailable");
+        let services = all_services().unwrap();
+        for (sid, category) in [(installer.sid(), "trusted-installer"), (services.0, "all-services")] {
+            assert_eq!(classify(sid, &user), category);
+            for product in [Product::CustomerDesk, Product::SupportConsole] {
+                for ancestor in [false, true] { assert!(!trusted_sid(sid, &user, product, ancestor)); }
+            }
+        }
+        let public_classes = [(WinLocalSystemSid, "system"), (WinBuiltinAdministratorsSid, "admins"),
+            (WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"), (WinCreatorOwnerSid, "creator-owner"),
+            (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"), (WinNullSid, "other")];
+        for (kind, category) in public_classes {
+            let mut buffer = [0usize; 16];
+            let sid = PSID(buffer.as_mut_ptr().cast());
+            let mut length = std::mem::size_of_val(&buffer) as u32;
+            unsafe { CreateWellKnownSid(kind, None, Some(sid), &mut length) }.unwrap();
+            assert_eq!(classify(sid, &user), category);
+        }
+        let expected_user = public_classes.iter().take(7)
+            .find(|(kind, _)| unsafe { IsWellKnownSid(user.sid(), *kind) }.as_bool())
+            .map(|(_, category)| *category).unwrap_or("current-user");
+        assert_eq!(classify(user.sid(), &user), expected_user);
+        assert_eq!(classify(PSID::default(), &user), "other");
+    }
+}
+
 fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor: bool) -> Result<(), Error> {
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
     unsafe { GetFileInformationByHandle(handle(file), &mut information) }.map_err(|_| untrusted("attributes-read"))?;
@@ -90,7 +198,11 @@ fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor
             Some(&mut owner), None, Some(&mut dacl), None, Some(&mut descriptor.0))
     };
     if result.0 != 0 || descriptor.0.0.is_null() || dacl.is_null() { return Err(untrusted("security-descriptor")); }
-    if !trusted_sid(owner, user, product, ancestor) { return Err(untrusted("owner-trust")); }
+    if !trusted_sid(owner, user, product, ancestor) {
+        #[cfg(all(test, ongrow_session_gate_probe))]
+        owner_diagnostics::rejected(owner, user);
+        return Err(untrusted("owner-trust"));
+    }
     if !ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err() {
         return Err(untrusted("owner-exact-user"));
     }
@@ -142,7 +254,7 @@ fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Er
         let file = open(&current, false, true, false)?;
         inspect(&file, user, product, true, index + 1 < components.len()).map_err(|error| {
             #[cfg(all(test, ongrow_session_gate_probe))]
-            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index + 1 < components.len() { "ancestor" } else { "protected-root" });
+            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index == 1 { "root-volume" } else if index + 1 < components.len() { "ancestor" } else { "protected-root" });
             error
         })?;
         held.push(file);

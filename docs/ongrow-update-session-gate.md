@@ -119,6 +119,29 @@ Pfade, SIDs, ACL-Inhalte und Kontonamen werden nicht ausgegeben. Diese Ausgabe
 existiert ausschließlich bei `cfg(test)` zusammen mit dem Probe-Marker.
 Alle Produktionsprüfungen und Trust-Regeln bleiben unverändert.
 
+Bei abgewiesenem Eigentümer ergänzt ausschließlich die Windows-Probe eine feste
+Klasse `system`, `admins`, `builtin-users`, `everyone`, `creator-owner`,
+`local-service`, `network-service`, `current-user`, `trusted-installer`,
+`all-services` oder `other`. Die Hierarchie nennt zusätzlich `root-volume`, niemals einen
+Pfad oder dessen konkrete Komponenten. Die Klassifikation verwendet exakte
+SID-Vergleiche, keine Präfixfreigabe für Service-SIDs. Eine Klassifikation ist
+keine Trust-Erteilung. Der native Windows-Test verlangt ausdrücklich, dass
+TrustedInstaller und All Services weiterhin für beide Produkte und beide
+Hierarchiestufen abgewiesen werden.
+
+Nur für die feste lokale TrustedInstaller-Identität verwendet die Probe den
+Windows-7-SDK-Import `LookupAccountNameLocalW`. SID- und Domainpuffer sind
+begrenzt, SID-Speicher ist nativ ausgerichtet und wird mit `IsValidSid` geprüft.
+Es gibt keinen Remoteparameter oder Netzwerk-Fallback. Der zurückgegebene
+Domainname bleibt opak im Prozessspeicher. Ein Fehler meldet ausschließlich
+`lookup-unavailable` und liefert keinen zusätzlichen Trust.
+Die API-Deklaration stammt aus
+[Microsoft WinBase.h](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/WinBase.h).
+Die öffentlichen SID-Kategorien sind in
+[Microsoft Security identifiers](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-identifiers)
+beschrieben. Daraus lässt sich der tatsächliche abgewiesene Runner-Eigentümer
+nicht ableiten; dafür ist der separate native Diagnoselauf erforderlich.
+
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte
 Lease-Clone/Subtask-Lebensdauer, unveränderte Gate-/Journal-Inodes, ungültige und

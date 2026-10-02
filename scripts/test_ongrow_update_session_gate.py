@@ -74,6 +74,23 @@ class SessionGateTests(unittest.TestCase):
         self.assertIn('eprintln!("ONGROW_GATE_REJECT:{category}")', windows)
         self.assertNotIn("{:?}", windows)
         self.assertNotIn("std::env::", windows)
+        self.assertIn("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", windows)
+        diagnostic = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
+        self.assertIn("fn LookupAccountNameLocalW(account: PCWSTR", diagnostic)
+        self.assertEqual(diagnostic.count('w!("NT SERVICE\\\\TrustedInstaller")'), 2)
+        self.assertNotIn("fn LookupAccountNameW(", diagnostic)
+        self.assertNotIn("LookupAccountSid", diagnostic)
+        self.assertIn("fn diagnostic_categories_never_grant_service_trust", diagnostic)
+        self.assertIn("assert!(!trusted_sid(sid, &user, product, ancestor))", diagnostic)
+        self.assertIn('"root-volume"', windows)
+        trusted = windows.split("fn trusted_sid(", 1)[1].split("\n}\n", 1)[0]
+        self.assertEqual(trusted, '''sid: PSID, user: &User, product: Product, _ancestor: bool) -> bool {
+    if sid.0.is_null() { return false; }
+    unsafe {
+        IsWellKnownSid(sid, WinLocalSystemSid).as_bool()
+            || IsWellKnownSid(sid, WinBuiltinAdministratorsSid).as_bool()
+            || (product == Product::SupportConsole && EqualSid(sid, user.sid()).is_ok())
+    }''')
 
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):
