@@ -266,6 +266,19 @@ class MsiTests(unittest.TestCase):
         self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size,st_ctime_ns")
         self.assertEqual(msi.differing_fields(expected, expected), "")
 
+    def test_native_optional_queries_keep_outer_array_and_preinstall_regression(self):
+        script = Path(__file__).with_name("test_ongrow_windows_msi_lifecycle.ps1").read_text()
+        for variable, table in (("actions", "CustomAction"), ("services", "ServiceInstall")):
+            assignment = next(line.strip() for line in script.splitlines() if line.strip().startswith(f"${variable} ="))
+            self.assertTrue(assignment.startswith(f"${variable} = @(if ($tableNames -contains '{table}') {{ Read-Rows "))
+            self.assertTrue(assignment.endswith(" })"))
+            self.assertIn(f"${variable}.Count", script)
+        self.assertIn("foreach ($rowCount in @(0,1,3))", script)
+        self.assertIn("foreach ($tablePresent in @($false,$true))", script)
+        self.assertIn("$rows = @(if ($tablePresent) { Read-Rows", script)
+        self.assertLess(script.index("\nAssert-ReadRowsContract\n"), script.index("# Compile production schemas"))
+        self.assertIn("finally { $null = $view.Close() }", script)
+
 
 if __name__ == "__main__":
     print("MSI unittest Python version: " + ".".join(map(str, sys.version_info[:3])), flush=True)

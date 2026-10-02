@@ -30,27 +30,46 @@ function Read-Rows($Database, [string]$Sql, [string[]]$Columns) {
 function Assert-ReadRowsContract {
     # Exercise the actual query adapter without COM or any installation. These
     # methods deliberately return non-row values, as COM automation may do.
-    $record = [PSCustomObject]@{}
-    Add-Member -InputObject $record -MemberType ScriptMethod -Name StringData -Value {
-        param([int]$Index)
-        if ($Index -eq 1) { return 'fixture-name' }
-        if ($Index -eq 2) { return 'fixture-value' }
-        throw 'Unexpected fixture column'
-    }
-    $view = [PSCustomObject]@{ Reads = 0; Row = $record; Closed = $false }
-    Add-Member -InputObject $view -MemberType ScriptMethod -Name Execute -Value { return 71 }
-    Add-Member -InputObject $view -MemberType ScriptMethod -Name Close -Value { $this.Closed = $true; return 72 }
-    Add-Member -InputObject $view -MemberType ScriptMethod -Name Fetch -Value {
-        if ($this.Reads -eq 0) { $this.Reads++; return $this.Row }
-        return $null
-    }
-    $database = [PSCustomObject]@{ View = $view }
-    Add-Member -InputObject $database -MemberType ScriptMethod -Name OpenView -Value { param([string]$Sql); return $this.View }
-    $rows = @(Read-Rows $database 'synthetic query only' @('Name','Value'))
-    if ($rows.Count -ne 1 -or $rows[0] -isnot [PSCustomObject] -or
-        (@($rows[0].PSObject.Properties.Name) -join ',') -ne 'Name,Value' -or
-        $rows[0].Name -ne 'fixture-name' -or $rows[0].Value -ne 'fixture-value' -or -not $view.Closed) {
-        throw 'Read-Rows returned non-row output or changed requested columns'
+    foreach ($rowCount in @(0,1,3)) {
+        $records = @(for ($i = 0; $i -lt $rowCount; $i++) {
+            $record = [PSCustomObject]@{ Name = "fixture-name-$i"; Value = "fixture-value-$i" }
+            Add-Member -InputObject $record -MemberType ScriptMethod -Name StringData -Value {
+                param([int]$Index)
+                if ($Index -eq 1) { return $this.Name }
+                if ($Index -eq 2) { return $this.Value }
+                throw 'Unexpected fixture column'
+            }
+            $record
+        })
+        $view = [PSCustomObject]@{ Reads = 0; Rows = $records; Closed = $false }
+        Add-Member -InputObject $view -MemberType ScriptMethod -Name Execute -Value { return 71 }
+        Add-Member -InputObject $view -MemberType ScriptMethod -Name Close -Value { $this.Closed = $true; return 72 }
+        Add-Member -InputObject $view -MemberType ScriptMethod -Name Fetch -Value {
+            if ($this.Reads -lt $this.Rows.Count) {
+                $row = $this.Rows[$this.Reads]
+                $this.Reads++
+                return $row
+            }
+            return $null
+        }
+        $database = [PSCustomObject]@{ View = $view }
+        Add-Member -InputObject $database -MemberType ScriptMethod -Name OpenView -Value { param([string]$Sql); return $this.View }
+        foreach ($tablePresent in @($false,$true)) {
+            $view.Reads = 0; $view.Closed = $false
+            # Wrap the whole conditional, as with optional native MSI tables.
+            $rows = @(if ($tablePresent) { Read-Rows $database 'synthetic query only' @('Name','Value') })
+            $expectedCount = if ($tablePresent) { $rowCount } else { 0 }
+            if ($rows -isnot [array] -or $rows.Count -ne $expectedCount -or $view.Closed -ne $tablePresent) {
+                throw 'Optional query lost its array shape, row count or close contract'
+            }
+            for ($i = 0; $i -lt $expectedCount; $i++) {
+                if ($rows[$i] -isnot [PSCustomObject] -or
+                    (@($rows[$i].PSObject.Properties.Name) -join ',') -ne 'Name,Value' -or
+                    $rows[$i].Name -ne "fixture-name-$i" -or $rows[$i].Value -ne "fixture-value-$i") {
+                    throw 'Read-Rows returned non-row output or changed requested columns/content'
+                }
+            }
+        }
     }
 }
 Assert-ReadRowsContract
@@ -65,7 +84,7 @@ function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Seque
         if ($props.ALLUSERS -ne '1') { throw 'Desk is not per-machine' }
     } elseif ($props.ContainsKey('ALLUSERS') -and $props.ALLUSERS -eq '1') { throw 'Console became per-machine' }
     $tableNames = @(Read-Rows $db 'SELECT `Name` FROM `_Tables`' @('Name') | ForEach-Object Name)
-    $actions = if ($tableNames -contains 'CustomAction') { @(Read-Rows $db 'SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`' @('Action','Type','Source','Target')) } else { @() }
+    $actions = @(if ($tableNames -contains 'CustomAction') { Read-Rows $db 'SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`' @('Action','Type','Source','Target') })
     if (-not $Probe -and $actions.Count -ne 0) { throw 'Production MSI has a custom action' }
     if ($Probe -and ($actions.Count -ne 1 -or $actions[0].Action -ne 'ProbeFailAfterWrite' -or $actions[0].Target -ne '--fail-update' -or ([int]$actions[0].Type -band 1024) -eq 0 -or ([int]$actions[0].Type -band 64) -ne 0)) { throw 'Probe action does not fail transactionally' }
     $exec = @(Read-Rows $db 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' @('Action','Sequence'))
@@ -79,7 +98,7 @@ function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Seque
     if (-not ($conditions | Where-Object { $_.Condition -eq 'Installed OR NOT SAME_VERSION_PRODUCT' })) { throw 'Bound MSI missing same-version guard' }
     $upgrades = @(Read-Rows $db 'SELECT `UpgradeCode`, `Attributes`, `ActionProperty` FROM `Upgrade`' @('Code','Flags','Property'))
     if (-not ($upgrades | Where-Object Property -eq 'WIX_DOWNGRADE_DETECTED')) { throw 'Downgrade guard missing' }
-    $services = if ($tableNames -contains 'ServiceInstall') { @(Read-Rows $db 'SELECT `Name`, `Arguments`, `StartName`, `ErrorControl` FROM `ServiceInstall`' @('Name','Arguments','Account','Error')) } else { @() }
+    $services = @(if ($tableNames -contains 'ServiceInstall') { Read-Rows $db 'SELECT `Name`, `Arguments`, `StartName`, `ErrorControl` FROM `ServiceInstall`' @('Name','Arguments','Account','Error') })
     if ($Product -eq 'customer-desk') {
         if ($services.Count -ne 1 -or $services[0].Name -ne $name -or $services[0].Arguments -ne '--service' -or $services[0].Account -ne 'LocalSystem' -or ([int]$services[0].Error -band 32768) -eq 0) { throw 'Wrong/non-vital service declaration' }
         $control = @(Read-Rows $db 'SELECT `Name`, `Event`, `Wait` FROM `ServiceControl`' @('Name','Events','Wait'))

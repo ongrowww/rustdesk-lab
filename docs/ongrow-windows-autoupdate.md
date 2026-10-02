@@ -66,10 +66,19 @@ the probe-owned registry value; assertions check that marker after both upgrade
 and rollback instead of inferring the running version from a file on disk.
 
 Until the native CI run passes, Windows lifecycle evidence remains pending.
+Native run `36985921551` passed the 15 Python tests and compiled the inert Desk
+schema, then stopped in table inspection because an optional-table conditional
+unwrapped an empty result before its `Count` check. Optional table queries now
+wrap the entire conditional in `@(...)`. The native adapter regression checks
+absent tables and present tables with zero, one and three synthetic rows, exact
+columns/content and view closure before any installer transaction. The portable
+structural regression checks that these outer array expressions remain intact;
+it does not execute PowerShell or prove native lifecycle success.
 Mac Python PASS is not native Windows PASS. This layer also does not prove real
 Desk service health, user-session exclusion, protected update staging, signed
 manifest consumption or end-to-end automatic installation.
 
 References: [WiX MajorUpgrade](https://docs.firegiant.com/wix/schema/wxs/majorupgrade/),
 [ServiceControl](https://docs.firegiant.com/wix/schema/wxs/servicecontrol/),
-[Windows Installer rollback](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-installation).
+[Windows Installer rollback](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-installation),
+[PowerShell array subexpression](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_arrays#the-array-subexpression-operator).
