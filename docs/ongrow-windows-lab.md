@@ -5,26 +5,72 @@ produktiven Windows-x64-VM. Verwende keine Kundendaten, Produktionspasswörter
 oder andere Produktionssecrets. Ein erfolgreicher GitHub-Build ersetzt diesen
 VM-Test nicht.
 
+## Setup-Paket und Grenzen
+
+Der Hauptdownload ist eine einzige Datei
+`ongrow-support-desk-<version>-windows-x64-<sha8>-Setup.exe` aus dem Artefakt
+`ongrow-support-desk-1.4.9-windows-x64-setup-unsigned-lab`. Daneben liegen
+die `.sha256`-Datei und die `.json`-Metadaten mit Produkt `customer-desk`,
+Plattform `windows-x64` und dem vollständigen Source-Commit. Diese Metadaten
+sind nicht signiert und erteilen keine Freigabe für automatische Updates.
+
+Die Setup-EXE enthält den vollständigen Desk einschließlich DLLs,
+Flutter-Daten, `LICENCE` und Build-Provenienz. Sie entpackt in einen neu
+angelegten eigenen Cache unter LocalAppData und startet mit `--install` den
+bestehenden Installationsdialog. Auch eine umbenannte Setup-Datei öffnet diesen
+Dialog. UAC, Dienst, Registry, Verknüpfungen und Deinstallation bleiben Aufgabe
+des vorhandenen nativen Installationswegs. Der Wrapper wartet auf dessen
+Prozessende und entfernt ausschließlich verifizierte eigene Payload-Dateien.
+Unbekannte oder veränderte Cache-Reste bleiben bei einem Fehler liegen.
+
+Die Paketierung aktiviert niemals eine Supportfreigabe. Ein erfolgreiches
+Entpacken beweist keine erfolgreiche Installation und keinen laufenden Dienst.
+Upgrade, Neustart, Widerruf, Identitätserhalt und Deinstallation benötigen
+weiterhin die echten Windows-Tests aus Plan014. Der persönliche Windows-Rechner
+ist offline und wird für diese Paketierungsarbeit nicht verwendet.
+
+`Setup.exe --ongrow-verify-payload` prüft den eingebetteten Inhalt, entpackt ihn
+sicher, liest die Dateien zurück und räumt den eigenen Cache wieder auf.
+Dieser Offline-Modus startet weder Desk noch Installation, Service, Registry-
+oder Enrollment-Aktionen. Die Windows-CI prüft die echte hochzuladende EXE
+und dieselben Bytes unter einem anderen Dateinamen mit diesem Modus.
+`ONGROW_CI_SMOKE_TEST=1` bleibt dabei gesetzt. Das ist keine menschliche
+Installationsabnahme.
+
+Das bisherige Desk-Verzeichnisartefakt
+`ongrow-support-desk-1.4.9-windows-x64-unsigned-lab` bleibt als diagnostischer
+Download erhalten. Es ist nicht der Kunden-Setup-Hauptweg. Die CI baut den
+Desktop nur einmal mit `--skip-portable-pack`, prüft dessen Rolle und
+Trust-Anchor und paketiert erst danach genau diesen geprüften Baum. Beide
+Build-Jobs verwenden den exakten PR-Head-SHA. Fremde Pull Requests führen
+diesen Lab-Workflow nicht aus.
+
 ## Voraussetzungen
 
 - Frische Windows-10- oder Windows-11-x64-VM mit Snapshot vor dem Test
 - Separater Testclient für die eingehende Supportverbindung
 - Lab-Gerät und Testkonto in Support Control
-- Artefakt `ongrow-support-desk-1.4.9-windows-x64-unsigned-lab`
-- Prüfsummendatei `OnGROW Support Desk.exe.sha256`
+- Setup-Artefakt `ongrow-support-desk-1.4.9-windows-x64-setup-unsigned-lab`
+- Zum Setup-Dateinamen passende `.sha256`- und `.json`-Dateien
 - Protokollvorlage am Ende dieses Dokuments
 
 ## Testablauf
 
 ### 1. Prüfsumme
 
-- [ ] SHA-256 der EXE mit `Get-FileHash '.\OnGROW Support Desk.exe' -Algorithm SHA256` berechnen.
-- [ ] Ergebnis mit `OnGROW Support Desk.exe.sha256` vergleichen.
+- [ ] SHA-256 der heruntergeladenen Setup-EXE mit `Get-FileHash '<Setup-Dateiname>' -Algorithm SHA256` berechnen.
+- [ ] Ergebnis mit der passenden `.sha256`-Datei und dem JSON-Feld `sha256` vergleichen.
+- [ ] JSON-Felder `product`, `platform`, `upstream_version` und `source_sha`
+      mit dem vorgesehenen Lab-Build vergleichen.
 - [ ] Test abbrechen, wenn die Prüfsumme abweicht.
 
-### 2. Portable App und Produktidentität
+### 2. Setup-Dialog und Produktidentität
 
-- [ ] EXE zunächst ohne Installation starten.
+- [ ] Setup-EXE doppelklicken. Es muss der vorhandene OnGROW-Installationsdialog
+      erscheinen, nicht bloß die portable Hauptoberfläche.
+- [ ] Dieselbe Setup-Datei unter einem anderen Dateinamen erneut prüfen.
+- [ ] Vor der Installationsbestätigung prüfen, dass keine Supportfreigabe
+      automatisch aktiviert wurde.
 - [ ] Dateiname, Fenstertitel, Produktname und Hersteller als OnGROW prüfen.
 - [ ] Prüfen, dass nur die Kundenoberfläche erscheint und keine ausgehende
       RustDesk-Startseite angeboten wird.
@@ -33,7 +79,7 @@ VM-Test nicht.
 
 ### 3. Installation, UAC und Service
 
-- [ ] Installation aus der App starten und den UAC-Dialog prüfen.
+- [ ] Installation im Setup-Dialog bewusst bestätigen und den UAC-Dialog prüfen.
 - [ ] Installationspfad unter `C:\Program Files\OnGROW Support Desk` prüfen.
 - [ ] In `services.msc` einen eigenen Service `OnGROW Support Desk` prüfen.
 - [ ] Sicherstellen, dass eine parallel installierte normale RustDesk-App,

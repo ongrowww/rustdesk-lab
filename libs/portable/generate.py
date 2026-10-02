@@ -4,7 +4,6 @@ import os
 import optparse
 import subprocess
 from hashlib import md5
-import brotli
 import datetime
 
 # 4GB maximum
@@ -16,23 +15,22 @@ encoding = 'utf-8'
 
 
 def generate_md5_table(folder: str, level) -> dict:
+    import brotli
     res: dict = dict()
-    curdir = os.curdir
-    os.chdir(folder)
-    for root, _, files in os.walk('.'):
-        # remove ./
-        for f in files:
+    for root, directories, files in os.walk(folder):
+        directories.sort()
+        for f in sorted(files):
             md5_generator = md5()
             full_path = os.path.join(root, f)
             print(f"Processing {full_path}...")
-            f = open(full_path, "rb")
-            content = f.read()
+            with open(full_path, "rb") as source:
+                content = source.read()
             content_compressed = brotli.compress(
                 content, quality=level)
             md5_generator.update(content)
             md5_code = md5_generator.hexdigest().encode(encoding=encoding)
-            res[full_path] = (content_compressed, md5_code)
-    os.chdir(curdir)
+            relative = './' + os.path.relpath(full_path, folder).replace(os.sep, '/')
+            res[relative] = (content_compressed, md5_code)
     return res
 
 
@@ -65,13 +63,15 @@ def write_app_metadata(output_folder: str):
         f.write(f"timestamp = {int(datetime.datetime.now().timestamp() * 1000)}\n")
     print(f"App metadata has been written to {output_path}")
 
-def build_portable(output_folder: str, target: str):
+def build_portable(output_folder: str, target: str, feature: str = None):
     current_dir = os.getcwd()
     try:
         os.chdir(output_folder)
         cmd = ["cargo", "build", "--locked", "--release"]
         if target:
             cmd.extend(["--target", target])
+        if feature:
+            cmd.extend(["--features", feature])
         subprocess.run(cmd, check=True)
     finally:
         os.chdir(current_dir)
@@ -90,6 +90,7 @@ if __name__ == '__main__':
                       help="specify startup file in --folder, default is rustdesk.exe")
     parser.add_option("-t", "--target", dest="target",
                       help="the target used by cargo")
+    parser.add_option("--feature", dest="feature", help="optional cargo feature")
     parser.add_option("-l", "--level", dest="level", type="int",
                       help="compression level, default is 11, highest", default=11)
     (options, args) = parser.parse_args()
@@ -98,16 +99,16 @@ if __name__ == '__main__':
 
     if not options.executable:
         options.executable = 'rustdesk.exe'
-    if not options.executable.startswith(folder):
-        options.executable = folder + '/' + options.executable
-    exe: str = os.path.abspath(options.executable)
-    if not exe.startswith(os.path.abspath(folder)):
+    exe = os.path.abspath(options.executable if os.path.isabs(options.executable) or os.path.isfile(options.executable)
+                          else os.path.join(folder, options.executable))
+    source = os.path.abspath(folder)
+    if os.path.commonpath([source, exe]) != source or not os.path.isfile(exe):
         print("The executable must locate in source folder")
         exit(-1)
-    exe = '.' + exe[len(os.path.abspath(folder)):]
+    exe = './' + os.path.relpath(exe, source).replace(os.sep, '/')
     print("Executable path: " + exe)
     print("Compression level: " + str(options.level))
     md5_table = generate_md5_table(folder, options.level)
     write_package_metadata(md5_table, output_folder, exe)
     write_app_metadata(output_folder)
-    build_portable(output_folder, options.target)
+    build_portable(output_folder, options.target, options.feature)
