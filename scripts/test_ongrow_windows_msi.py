@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -259,5 +260,13 @@ class MsiTests(unittest.TestCase):
         for kwargs in [dict(sha="A" * 40), dict(upstream="../bad"), dict(sequence=0), dict(product="foreign")]:
             self.reject(**kwargs)
 
+    def test_metadata_diagnostics_expose_only_field_names(self):
+        expected = (101, 202, 3, 404, 505)
+        actual = (909, 202, 8, 404, 606)
+        self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size,st_ctime_ns")
+        self.assertEqual(msi.differing_fields(expected, expected), "")
 
-if __name__ == "__main__": unittest.main()
+
+if __name__ == "__main__":
+    print("MSI unittest Python version: " + ".".join(map(str, sys.version_info[:3])), flush=True)
+    unittest.main()

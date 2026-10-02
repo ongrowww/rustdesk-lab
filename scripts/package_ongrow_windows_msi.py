@@ -22,6 +22,7 @@ ET.register_namespace("", NS)
 # Public, deterministic package identities, not device or user identifiers.
 IDENTITY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://ongrow.de/software/msi/v1")
 MAX_SEQUENCE = 256 * 256 * 65536 - 1
+SNAPSHOT_FIELDS = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
 PROFILES = {
     "customer-desk": dict(name="OnGROW Support Desk", internal="ongrow_support_desk", scope="perMachine"),
     "support-console": dict(name="OnGROW Support Console", internal="ongrow_support_console", scope="perUser"),
@@ -78,6 +79,11 @@ def snapshot(path: Path):
     if redirected(path) or not stat.S_ISREG(s.st_mode) or s.st_nlink != 1:
         raise ValueError("Redirected, hardlinked or nonregular payload refused")
     return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+
+def differing_fields(expected, actual):
+    """Report field names only, never filesystem identities, values or paths."""
+    return ",".join(name for name, before, after in zip(SNAPSHOT_FIELDS, expected, actual) if before != after)
 
 
 def validate(source: Path, output: Path, product: str, sequence: int, upstream: str, sha: str, probe=False):
@@ -254,8 +260,9 @@ def package(source, output, product, sequence, upstream, sha, emit_only=False, p
             raise ValueError("Source changed before copy")
         with src.open("rb") as inp, target.open("xb") as out:
             s = os.fstat(inp.fileno())
-            if (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns) != expected:
-                raise ValueError("Source redirected before open")
+            opened = (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            if opened != expected:
+                raise ValueError("Source redirected before open (differing fields: " + differing_fields(expected, opened) + ")")
             digest = hashlib.sha256()
             while chunk := inp.read(1024 * 1024):
                 digest.update(chunk)
