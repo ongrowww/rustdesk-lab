@@ -1,15 +1,39 @@
 #![windows_subsystem = "windows"]
 
+#[cfg(not(feature = "ongrow-support-desk"))]
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
+#[cfg(not(feature = "ongrow-support-desk"))]
 use bin_reader::BinaryReader;
 
 pub mod bin_reader;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "ongrow-support-desk")))]
 mod ui;
+
+#[cfg(feature = "ongrow-support-desk")]
+mod ongrow_setup;
+
+#[cfg(feature = "ongrow-support-desk")]
+fn main() {
+    if let Err(error) = ongrow_setup::run() {
+        eprintln!("OnGROW Support Desk Setup failed: {error}");
+        #[cfg(windows)]
+        if !std::env::args().any(|arg| arg == "--ongrow-verify-payload") {
+            native_windows_gui::error_message(
+                "OnGROW Support Desk Setup",
+                &format!("Setup failed: {error}"),
+            );
+        }
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "ongrow-support-desk"))]
+mod upstream {
+use super::*;
 
 #[cfg(windows)]
 const APP_METADATA: &[u8] = include_bytes!("../app_metadata.toml");
@@ -174,7 +198,7 @@ fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
     }
 }
 
-fn main() {
+pub(super) fn run() {
     let mut args = Vec::new();
     let mut arg_exe = Default::default();
     let mut i = 0;
@@ -210,7 +234,14 @@ fn main() {
     }
 }
 
-#[cfg(windows)]
+}
+
+#[cfg(not(feature = "ongrow-support-desk"))]
+fn main() {
+    upstream::run();
+}
+
+#[cfg(all(windows, not(feature = "ongrow-support-desk")))]
 mod win {
     use std::{fs, os::windows::process::CommandExt, path::Path, process::Command};
 
