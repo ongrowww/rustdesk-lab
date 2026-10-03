@@ -224,3 +224,81 @@ pub(super) fn fixture_initialize(path: &Path) -> Result<(), Error> {
 pub(super) fn fixture_acquire(path: &Path, exclusive: bool) -> Result<Lock, Error> {
     acquire(path, unsafe { libc::geteuid() }, exclusive)
 }
+// ONGROW_STORE_ADDITIONS_BEGIN
+use super::store_handles::Child;
+
+pub(super) struct ProtectedRoot { directory: File, _ancestors: Vec<File>, owner: u32 }
+#[derive(PartialEq, Eq)]
+pub(super) struct StoreFileIdentity(u64, u64);
+pub(super) struct StoreLock { file: File }
+impl Drop for StoreLock {
+    fn drop(&mut self) { unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN); } }
+}
+impl ProtectedRoot {
+    pub(super) fn open(product: Product) -> Result<Self, Error> {
+        let (path, owner) = root(product)?;
+        Self::checked(&path, owner)
+    }
+    fn checked(path: &Path, owner: u32) -> Result<Self, Error> {
+        let directory = trusted_directory(path, owner)?;
+        // Keep the complete checked chain alive as well as the relative root.
+        let slash = CString::new("/").map_err(|_| Error::Untrusted)?;
+        let fd = unsafe { libc::open(slash.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW) };
+        if fd < 0 { return Err(Error::Untrusted); }
+        let first = unsafe { File::from_raw_fd(fd) };
+        inspect(&first, owner, true, true)?;
+        let mut held = vec![first];
+        let parts: Vec<_> = path.components().collect();
+        for (index, part) in parts.iter().enumerate() {
+            match part {
+                Component::RootDir => continue,
+                Component::Normal(name) => {
+                    let parent = held.last().ok_or(Error::Untrusted)?;
+                    let file = open_at(parent, name.to_str().ok_or(Error::Untrusted)?, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+                    inspect(&file, owner, true, index + 1 < parts.len())?;
+                    held.push(file);
+                }
+                _ => return Err(Error::Untrusted),
+            }
+        }
+        let end = held.last().ok_or(Error::Untrusted)?.metadata().map_err(|_| Error::Io)?;
+        let selected = directory.metadata().map_err(|_| Error::Io)?;
+        if end.dev() != selected.dev() || end.ino() != selected.ino() { return Err(Error::Untrusted); }
+        Ok(Self { directory, _ancestors: held, owner })
+    }
+    pub(super) fn create(&self, child: Child) -> Result<File, Error> {
+        inspect(&self.directory, self.owner, true, false)?;
+        let file = open_at(&self.directory, child.name(), libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600)?;
+        inspect(&file, self.owner, false, false)?;
+        Ok(file)
+    }
+    pub(super) fn read(&self, child: Child) -> Result<File, Error> {
+        inspect(&self.directory, self.owner, true, false)?;
+        let file = open_at(&self.directory, child.name(), libc::O_RDONLY, 0)?;
+        inspect(&file, self.owner, false, false)?;
+        Ok(file)
+    }
+    pub(super) fn identity(&self, file: &File) -> Result<StoreFileIdentity, Error> {
+        inspect(file, self.owner, false, false)?;
+        let metadata = file.metadata().map_err(|_| Error::Io)?;
+        Ok(StoreFileIdentity(metadata.dev(), metadata.ino()))
+    }
+    pub(super) fn sync_file(&self, file: &File) -> Result<(), Error> {
+        self.identity(file)?;
+        file.sync_all().map_err(|_| Error::Io)?;
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_FULLFSYNC) } != 0 { return Err(Error::Io); }
+        Ok(())
+    }
+    pub(super) fn sync_directory(&self) -> Result<(), Error> { self.directory.sync_all().map_err(|_| Error::Io) }
+    pub(super) fn stage_lease(&self) -> Result<StoreLock, Error> {
+        let file = self.read(Child::StageLock)?;
+        if file.metadata().map_err(|_| Error::Io)?.len() != 1 { return Err(Error::Untrusted); }
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(if std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK) { Error::Busy } else { Error::Io });
+        }
+        Ok(StoreLock { file })
+    }
+    #[cfg(all(test, ongrow_update_store_probe))]
+    pub(super) fn fixture(path: &Path) -> Result<Self, Error> { Self::checked(path, unsafe { libc::geteuid() }) }
+}
+// ONGROW_STORE_ADDITIONS_END

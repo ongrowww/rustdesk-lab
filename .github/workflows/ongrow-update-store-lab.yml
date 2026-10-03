@@ -1,0 +1,62 @@
+name: OnGROW protected update store native probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/ongrow_update/**'
+      - 'scripts/test_ongrow_update_store.py'
+      - 'scripts/test_ongrow_update_runtime.py'
+      - 'scripts/test_ongrow_update_session_gate.py'
+      - 'scripts/fixtures/ongrow_update_store_probe/**'
+      - '.github/workflows/ongrow-update-store-lab.yml'
+      - 'docs/ongrow-update-store.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ongrow-update-store-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-store:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact trusted store source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source and install isolated toolchain on disposable runner
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Isolated probe Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: '1.81.0'
+
+      - name: Original native store and gate regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/test_ongrow_update_store.py
+          python scripts/test_ongrow_update_session_gate.py
+          python scripts/test_ongrow_product_profile.py
+          python scripts/test_ongrow_ci_isolation.py
+          git diff --exit-code a620d13809b94cc2baa06bf77a4a741769ef413f "$SOURCE_SHA" -- \
+            Cargo.toml Cargo.lock src/ongrow_update/session_gate_tests.rs \
+            scripts/test_ongrow_update_session_gate.py scripts/fixtures/ongrow_session_gate_probe \
+            docs/ongrow-update-session-gate.md .github/workflows/ongrow-update-session-gate-lab.yml
+          git diff --check

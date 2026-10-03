@@ -4,6 +4,8 @@
 pub mod manifest;
 pub mod session_gate;
 pub(crate) mod runtime;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) mod protected_store;
 
 use hbb_common::sodiumoxide::{self, crypto::sign};
 use manifest::{Channel, Manifest, Platform, Product};
