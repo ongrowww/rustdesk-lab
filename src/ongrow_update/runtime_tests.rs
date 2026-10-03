@@ -1,4 +1,4 @@
-use super::super::{StreamingPayloadVerifier, SIGNATURE_DOMAIN};
+use super::super::{verify_manifest, StreamingPayloadVerifier, SIGNATURE_DOMAIN};
 use super::*;
 use hbb_common::sodiumoxide::{self, crypto::sign};
 use serde_json::{json, Value};
@@ -266,6 +266,12 @@ mod native {
                         route["chunked"] = json!(true);
                     }
                 }
+                let published_raw: Vec<u8> =
+                    serde_json::from_value(routes["/releases/manifest.json"]["body"].clone())
+                        .unwrap();
+                let published_signature: Vec<u8> =
+                    serde_json::from_value(routes["/releases/manifest.sig"]["body"].clone())
+                        .unwrap();
                 f.publish(&routes);
                 let runtime = f.runtime(product, true);
                 let mut sink = Sink::default();
@@ -278,6 +284,18 @@ mod native {
                     CheckOutcome::NoUpdate => panic!("new release must download"),
                 };
                 assert_eq!(verified.candidate().manifest().release_sequence, 9);
+                let (raw, signature) = verified.signed_manifest();
+                assert_eq!(raw, published_raw);
+                assert_eq!(signature.as_slice(), published_signature);
+                assert!(raw.len() <= MAX_MANIFEST_BYTES);
+                let reverified = verify_manifest(
+                    raw,
+                    signature,
+                    f.public.as_ref(),
+                    &runtime.policy.context(100, LastAcceptedSequence::Known(8)),
+                )
+                .unwrap();
+                reverified.verify_payload(&sink.bytes).unwrap();
                 assert_eq!(sink.bytes, PAYLOAD);
                 assert!(sink.flushed);
                 assert_eq!(f.requests().len(), 3);

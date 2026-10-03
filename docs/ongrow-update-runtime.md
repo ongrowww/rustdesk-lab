@@ -49,8 +49,13 @@ Zählerüberlauf werden vor dem Schreiben dieses Chunks abgewiesen. Am Ende müs
 Bytezahl und SHA-256 stimmen, danach muss der Sink erfolgreich flushen.
 
 `VerifiedTransfer` bescheinigt nur diesen abgeschlossenen Transfer. Es enthält
-keinen Pfad und verleiht einer später veränderten Datei keinen dauerhaften
-Verified-Status. Bei jedem Fehler sind bereits geschriebene Bytes untrusted.
+das unveränderte, auf 64 KiB begrenzte Manifest und die exakt 64 Bytes lange
+detached Signatur privat. Ein Read-only-Borrow liefert die authentifizierten
+Originalbytes für eine spätere Prüfung mit frischem vertrauenswürdigem Kontext.
+JSON wird dafür nicht erneut serialisiert. Das Ergebnis enthält keinen Pfad,
+erteilt keine Authority und verleiht einer später veränderten Datei keinen
+dauerhaften Verified-Status. `NoUpdate` und Fehler liefern keinen Transfer.
+Bei jedem Fehler sind bereits geschriebene Bytes untrusted.
 Der Aufrufer besitzt und entsorgt sie nach seinem geschützten Staging-Vertrag.
 Dieser Download implementiert weder geschütztes Staging noch Installer-Authority,
 Transaktion, Apply, Health-Prüfung oder Recovery. Er ersetzt nicht die Sitzungssperre

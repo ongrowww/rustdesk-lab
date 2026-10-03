@@ -181,10 +181,18 @@ impl Drop for CheckLease {
 /// A future apply operation must reverify a protected handle independently.
 pub(crate) struct VerifiedTransfer {
     candidate: VerifiedCandidate,
+    raw_manifest: Vec<u8>,
+    detached_signature: [u8; 64],
 }
 impl VerifiedTransfer {
     pub(crate) fn candidate(&self) -> &VerifiedCandidate {
         &self.candidate
+    }
+
+    /// Exact authenticated bytes for a future verifier with fresh trusted state.
+    /// These bounded read-only bytes confer no staging or installer authority.
+    pub(crate) fn signed_manifest(&self) -> (&[u8], &[u8; 64]) {
+        (&self.raw_manifest, &self.detached_signature)
     }
 }
 
@@ -341,9 +349,11 @@ impl UpdateRuntime {
         let raw = self
             .metadata(&self.policy.manifest_url, MAX_MANIFEST_BYTES, None)
             .await?;
-        let signature = self
+        let signature: [u8; 64] = self
             .metadata(&self.policy.signature_url, 64, Some(64))
-            .await?;
+            .await?
+            .try_into()
+            .map_err(|_| Error::InvalidSignature)?;
         let candidate = match super::verify_manifest(
             &raw,
             &signature,
@@ -378,7 +388,11 @@ impl UpdateRuntime {
         }
         verifier.finalize()?;
         sink.flush().await.map_err(|_| RuntimeError::Sink)?;
-        Ok(CheckOutcome::Downloaded(VerifiedTransfer { candidate }))
+        Ok(CheckOutcome::Downloaded(VerifiedTransfer {
+            candidate,
+            raw_manifest: raw,
+            detached_signature: signature,
+        }))
     }
 }
 
