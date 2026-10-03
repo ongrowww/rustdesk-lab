@@ -98,3 +98,12 @@ gepinnten Actions und einem geprüften `SOURCE_SHA`. Er akzeptiert nur interne
 PR-Heads oder Dispatch, hat nur `contents: read`, nutzt keine Secrets und baut
 weder Flutter/VCPKG noch echte Apps. Er lädt keine TLS-Key-Artefakte hoch.
 Windows-Nachweis bleibt bis zu einem tatsächlich bestandenen CI-Lauf offen.
+
+Die CI-Unverändertprüfung vergleicht den expliziten `SOURCE_SHA` mit dem
+reviewten Gate-Parent `bb931d2a0b080e2d5123d17c243e5effe0c89f1b`. Cargo-Dateien,
+Gate-Quellen, native Fixtures, Prüfskript, Dokumentation und Gate-Workflow müssen
+diesem Parent entsprechen. Die Runtime-Änderung umfasst nur die acht eigenen
+Dateien. Der frühere Ausgangsstand ist kein Ersatz für diese Parent-Grenze.
+Vorhandene öffentliche Producer-Fixtures werden von der Original-Manifest-Suite
+mit nativer Kryptografie geprüft. Auch mit diesem Nachweis bleibt ein lokaler
+macOS-Lauf kein Windows-, Installer- oder Produktionsnachweis.

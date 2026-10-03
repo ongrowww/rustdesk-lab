@@ -60,5 +60,9 @@ jobs:
           python scripts/test_ongrow_update_runtime.py
           python scripts/test_ongrow_product_profile.py
           python scripts/test_ongrow_ci_isolation.py
-          git diff --exit-code af58da41f7d21552e3712def936496d83a0c5b4c -- Cargo.toml Cargo.lock src/ongrow_update/session_gate.rs src/ongrow_update/session_gate
+          git diff --exit-code bb931d2a0b080e2d5123d17c243e5effe0c89f1b "$SOURCE_SHA" -- \
+            Cargo.toml Cargo.lock src/ongrow_update/session_gate.rs src/ongrow_update/session_gate \
+            src/ongrow_update/session_gate_tests.rs scripts/test_ongrow_update_session_gate.py \
+            scripts/fixtures/ongrow_session_gate_probe docs/ongrow-update-session-gate.md \
+            .github/workflows/ongrow-update-session-gate-lab.yml
           git diff --check
