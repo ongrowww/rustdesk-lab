@@ -38,6 +38,11 @@ Die vorhandene Runtime ist die einzige Downloadpipeline. Jedes Datei-I/O läuft
 im vorhandenen Tokio-Blockingpool mit eigenem Root- und Stagelease-Besitz.
 Pro Write werden höchstens 64 KiB kopiert. Auch nach Caller-Cancel bleiben diese
 Guards bis zum letzten Job-I/O und zum Schließen eines verworfenen Outputs erhalten.
+Create/Write/Flush und Seal nutzen private Job-Factories mit Writer-first-Input.
+Die erste Closure-Anweisung übernimmt den ganzen Container lokal. Das erzwingt
+Whole-Capture statt einzelner Edition-2021-Feldcaptures, deren Drop-Reihenfolge
+keinen Writer-vor-Guards-Vertrag liefert. Auch ein vor seinem Start verworfener
+Job schließt dadurch den Writer vor Stagelease und Root.
 
 Seal übernimmt den exklusiven Writer erst nach abgeschlossenem Job, flusht und
 synchronisiert ihn und schließt ihn vor dem geprüften Read-only-Reopen. Der
@@ -83,6 +88,20 @@ vertrauenswürdigen Eigentümer. Die Probe prüft diese Grenze durch tatsächlic
 Mutation und anschließende Hash-Ablehnung. Windows muss Write und Replace während
 des gehaltenen Read-only-Tickets verweigern. Lokales macOS-PASS ist kein
 Windows-PASS; beide nativen CI-Runner folgen erst nach Review.
+
+Die Ownership-Probe verwendet genau dieselben Job-Closures wie Produktion.
+Sie verwirft Write- und Seal-Closure vor dem Aufruf, ohne laufenden Tokio- oder
+Client-Hintergrund. Seal erhält einen echten Transfer aus dem Original-TLS-Pfad.
+Ein früher Sealfehler nutzt die tatsächliche Sequence-Dateiidentität als falsche
+Payloadidentität. Ein ausschließlich Testmarker-gebundener Beobachter hält nur
+Weak-Referenzen und einen nichtbesitzenden FD-/Handlewert. Er prüft zuerst
+`F_GETFD`/`EBADF` oder `GetHandleInformation`/`ERROR_INVALID_HANDLE`, ohne vorher
+ein neues Handle zu öffnen. Danach muss der Root noch leben und ein echter
+Childprozess am Stage-Lock scheitern, während Versionbyte 0 lesbar bleibt.
+Nach vollständig verworfenem Job muss derselbe Child den Lock erhalten; Slot
+und akzeptierte Sequenz bleiben unverändert. Das ist ein nativer Beleg für
+Closure-Ownership vor Jobstart und beim frühen Fehler, kein Nachweis tatsächlichen
+Tokio-Shutdown-Schedulings. Der gesonderte echte Creating-Cancel-Test bleibt bestehen.
 
 Der Gesamtupdater bleibt unvollständig. Installer-Authority, Exclusive/Pending
 vor Prozessstop, Installer, Zielprozess, Health, Rollback und Aktivierung fehlen.

@@ -142,7 +142,10 @@ impl ProtectedStore {
             Err(error) => return Err(error.into()),
             Ok(_) => return Err(Error::State),
         }
-        Ok(PendingStage { writer: None, identity: None, work: None,
+        Ok(PendingStage { writer: None,
+            #[cfg(all(test, ongrow_update_store_probe))]
+            observer: None,
+            identity: None, work: None,
             context: Arc::clone(&self.context), lease })
     }
     pub(crate) async fn download(&self, manual: bool) -> Result<StageOutcome, Error> {
@@ -166,44 +169,84 @@ impl ProtectedStore {
 
 /// The writer is private and consumed by seal. Drop never deletes the fixed slot.
 struct PendingStage {
-    writer: Option<File>, identity: Option<FileIdentity>,
+    writer: Option<File>,
+    #[cfg(all(test, ongrow_update_store_probe))]
+    observer: Option<tests::DropObserver>,
+    identity: Option<FileIdentity>,
     work: Option<tokio::task::JoinHandle<std::io::Result<WorkResult>>>,
     lease: Arc<StageLease>, context: Arc<StoreContext>,
 }
 // Field order closes the writer before releasing its kernel lease and root,
 // including when a cancelled JoinHandle discards an already-completed output.
 struct WorkResult {
-    writer: File, identity: FileIdentity, count: usize,
+    writer: File,
+    #[cfg(all(test, ongrow_update_store_probe))]
+    observer: Option<tests::DropObserver>,
+    identity: FileIdentity, count: usize,
     _lease: Arc<StageLease>, _context: Arc<StoreContext>,
 }
 enum Operation { Write(Vec<u8>), Flush }
+// Whole-container capture preserves this order even before the job starts.
+struct StageJobInput {
+    writer: Option<File>,
+    #[cfg(all(test, ongrow_update_store_probe))]
+    observer: Option<tests::DropObserver>,
+    identity: Option<FileIdentity>, operation: Operation,
+    lease: Arc<StageLease>, context: Arc<StoreContext>,
+}
 fn sink_error() -> std::io::Error { std::io::Error::new(std::io::ErrorKind::Other, "protected stage I/O rejected") }
+fn write_job(input: StageJobInput) -> impl FnOnce() -> std::io::Result<WorkResult> {
+    move || {
+        let mut input = input;
+        // Locals taken afterward close before the still-owned input guards on error.
+        let (mut writer, identity) = match (input.writer.take(), input.identity.take()) {
+            (Some(writer), Some(identity)) => (writer, identity),
+            (None, None) if matches!(input.operation, Operation::Write(_)) => {
+                #[cfg(all(test, ongrow_update_store_probe))]
+                if let Some(pause) = &input.context.creation_pause { pause.wait().map_err(|_| sink_error())?; }
+                let file = input.context.root.create(Child::Payload).map_err(|_| sink_error())?;
+                let identity = input.context.root.identity(&file).map_err(|_| sink_error())?;
+                (file, identity)
+            }
+            _ => return Err(sink_error()),
+        };
+        let count = match input.operation {
+            Operation::Write(bytes) => writer.write(&bytes)?,
+            Operation::Flush => { writer.flush()?; 0 },
+        };
+        Ok(WorkResult { writer,
+            #[cfg(all(test, ongrow_update_store_probe))]
+            observer: input.observer.take(),
+            identity, count, _lease: input.lease, _context: input.context })
+    }
+}
+fn seal_job(input: WorkResult, transfer: VerifiedTransfer) -> impl FnOnce() -> Result<SealedStageTicket, Error> {
+    move || {
+        let mut input = input;
+        input.writer.flush().map_err(|_| Error::Io)?;
+        input._context.root.same(&input.writer, &input.identity)?;
+        input._context.root.sync_file(&input.writer)?;
+        drop(input.writer);
+        let reader = input._context.root.read(Child::Payload)?;
+        input._context.root.same(&reader, &input.identity)?;
+        let (raw, signature) = transfer.signed_manifest();
+        let snapshot = input._context.snapshot()?;
+        let candidate = verify_manifest(raw, signature, &input._context.identity.key,
+            &input._context.identity.context(input._context.now()?, snapshot))?;
+        hash_handle(&reader, &candidate)?;
+        input._context.root.same(&reader, &input.identity)?;
+        Ok(SealedStageTicket { reader, identity: input.identity, context: input._context, _lease: input._lease,
+            candidate, raw_manifest: raw.to_vec(), signature: *signature })
+    }
+}
 impl PendingStage {
     fn start(&mut self, operation: Operation) {
-        let writer = self.writer.take();
-        let identity = self.identity.take();
-        let context = Arc::clone(&self.context);
-        let lease = Arc::clone(&self.lease);
-        self.work = Some(tokio::task::spawn_blocking(move || {
-            // The job itself owns the root and lease, even after caller cancel.
-            let _lease = lease;
-            let (mut writer, identity) = match (writer, identity) {
-                (Some(writer), Some(identity)) => (writer, identity),
-                (None, None) if matches!(operation, Operation::Write(_)) => {
-                    #[cfg(all(test, ongrow_update_store_probe))]
-                    if let Some(pause) = &context.creation_pause { pause.wait().map_err(|_| sink_error())?; }
-                    let file = context.root.create(Child::Payload).map_err(|_| sink_error())?;
-                    let identity = context.root.identity(&file).map_err(|_| sink_error())?;
-                    (file, identity)
-                }
-                _ => return Err(sink_error()),
-            };
-            let count = match operation {
-                Operation::Write(bytes) => writer.write(&bytes)?,
-                Operation::Flush => { writer.flush()?; 0 },
-            };
-            Ok(WorkResult { writer, identity, count, _lease, _context: context })
-        }));
+        let input = StageJobInput { writer: self.writer.take(),
+            #[cfg(all(test, ongrow_update_store_probe))]
+            observer: self.observer.take(),
+            identity: self.identity.take(), operation,
+            lease: Arc::clone(&self.lease), context: Arc::clone(&self.context) };
+        self.work = Some(tokio::task::spawn_blocking(write_job(input)));
     }
     fn finish(&mut self, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<usize>> {
         let Some(work) = self.work.as_mut() else { return Poll::Ready(Err(sink_error())); };
@@ -215,6 +258,8 @@ impl PendingStage {
         match result {
             Ok(Ok(result)) => {
                 self.writer = Some(result.writer);
+                #[cfg(all(test, ongrow_update_store_probe))]
+                { self.observer = result.observer; }
                 self.identity = Some(result.identity);
                 Poll::Ready(Ok(result.count))
             }
@@ -246,27 +291,17 @@ impl PendingStage {
         if let Some(work) = self.work.take() {
             let finished = work.await.map_err(|_| Error::Io)?.map_err(|_| Error::Io)?;
             self.writer = Some(finished.writer);
+            #[cfg(all(test, ongrow_update_store_probe))]
+            { self.observer = finished.observer; }
             self.identity = Some(finished.identity);
         }
         let writer = self.writer.take().ok_or(Error::State)?;
         let identity = self.identity.take().ok_or(Error::State)?;
-        let mut input = WorkResult { writer, identity, count: 0, _context: self.context, _lease: self.lease };
-        tokio::task::spawn_blocking(move || {
-            input.writer.flush().map_err(|_| Error::Io)?;
-            input._context.root.same(&input.writer, &input.identity)?;
-            input._context.root.sync_file(&input.writer)?;
-            drop(input.writer);
-            let reader = input._context.root.read(Child::Payload)?;
-            input._context.root.same(&reader, &input.identity)?;
-            let (raw, signature) = transfer.signed_manifest();
-            let snapshot = input._context.snapshot()?;
-            let candidate = verify_manifest(raw, signature, &input._context.identity.key,
-                &input._context.identity.context(input._context.now()?, snapshot))?;
-            hash_handle(&reader, &candidate)?;
-            input._context.root.same(&reader, &input.identity)?;
-            Ok(SealedStageTicket { reader, identity: input.identity, context: input._context, _lease: input._lease,
-                candidate, raw_manifest: raw.to_vec(), signature: *signature })
-        }).await.map_err(|_| Error::Io)?
+        let input = WorkResult { writer,
+            #[cfg(all(test, ongrow_update_store_probe))]
+            observer: self.observer.take(),
+            identity, count: 0, _context: self.context, _lease: self.lease };
+        tokio::task::spawn_blocking(seal_job(input, transfer)).await.map_err(|_| Error::Io)?
     }
 }
 

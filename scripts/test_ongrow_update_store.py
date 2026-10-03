@@ -87,7 +87,9 @@ class SourceTests(unittest.TestCase):
                          "tokio::task::spawn_blocking", "_lease: Arc<StageLease>, _context: Arc<StoreContext>"):
             self.assertIn(required, source)
         self.assertLess(source.index("drop(input.writer)"), source.index("let reader = input._context.root.read"))
-        self.assertIn("writer: None, identity: None, work: None", source)
+        initialization = source.split("Ok(PendingStage {", 1)[1].split("})", 1)[0]
+        for field in ("writer: None", "identity: None", "work: None"):
+            self.assertIn(field, initialization)
         before_download = source.split("fn begin_stage", 1)[1].split("pub(crate) async fn download", 1)[0]
         self.assertIn("self.context.root.read(Child::Payload)", before_download)
         self.assertNotIn("create(Child::Payload)", before_download)
@@ -96,6 +98,37 @@ class SourceTests(unittest.TestCase):
             self.assertNotIn(forbidden, ticket)
         mod = (ROOT / "src/ongrow_update/mod.rs").read_text(encoding="utf-8", errors="strict")
         self.assertIn('#[cfg(any(target_os = "macos", target_os = "windows"))]\npub(crate) mod protected_store;', mod)
+
+    def test_actual_job_factories_whole_capture_and_ordered_guards(self):
+        source = (ROOT / "src/ongrow_update/protected_store.rs").read_text(encoding="utf-8", errors="strict")
+        for name, following in (("write_job", "fn seal_job"), ("seal_job", "impl PendingStage")):
+            factory = source.split("fn " + name + "(", 1)[1].split(following, 1)[0]
+            self.assertRegex(factory, r"move \|\| \{\s*let mut input = input;")
+            for forbidden in ("let lease = input.", "let context = input.", "let _lease = input."):
+                self.assertNotIn(forbidden, factory)
+        self.assertIn("spawn_blocking(write_job(input))", source)
+        self.assertIn("spawn_blocking(seal_job(input, transfer))", source)
+        for structure, writer, lease, context in (("StageJobInput", "writer: Option<File>", "lease: Arc<StageLease>", "context: Arc<StoreContext>"),
+                                                   ("WorkResult", "writer: File", "_lease: Arc<StageLease>", "_context: Arc<StoreContext>")):
+            body = source.split("struct " + structure + " {", 1)[1].split("\n}", 1)[0]
+            self.assertTrue(body.lstrip().startswith(writer))
+            observer = '#[cfg(all(test, ongrow_update_store_probe))]\n    observer: Option<tests::DropObserver>'
+            self.assertIn(observer, body)
+            self.assertLess(body.index(writer), body.index(observer))
+            self.assertLess(body.index(observer), body.index("identity:"))
+            self.assertLess(body.index("identity:"), body.index(lease))
+            self.assertLess(body.index(lease), body.index(context))
+        tests = (ROOT / "src/ongrow_update/protected_store_tests.rs").read_text(encoding="utf-8", errors="strict")
+        for name in ("actual_write_closure_drop_closes_writer_before_native_guards",
+                     "actual_seal_closure_drop_closes_writer_before_native_guards",
+                     "actual_early_seal_error_closes_writer_before_native_guards"):
+            self.assertIn("fn " + name + "()", tests)
+        observer = tests.split("impl Drop for DropObserver", 1)[1].split("pub(super) struct CreationPause", 1)[0]
+        for required in ("libc::F_GETFD", "libc::EBADF", "GetHandleInformation", "ERROR_INVALID_HANDLE", 'child(&self.path, "busy")'):
+            self.assertIn(required, observer)
+        self.assertLess(observer.index("GetHandleInformation(HANDLE"), observer.index('child(&self.path, "busy")'))
+        for forbidden in ("from_raw_fd", "from_raw_handle", ".upgrade()", "CloseHandle"):
+            self.assertNotIn(forbidden, observer)
 
     def test_probe_pins_match_existing_and_workflows_are_inactive(self):
         original = (ROOT / "scripts/fixtures/ongrow_update_runtime_probe/Cargo.toml").read_text(encoding="utf-8", errors="strict")

@@ -4,6 +4,47 @@ use hbb_common::tokio::io::AsyncWriteExt;
 use serde_json::json;
 use std::{fs, path::{Path, PathBuf}, process::Command, sync::{mpsc, Mutex}, time::Duration};
 
+pub(super) struct DropObserver {
+    writer: usize, lease: std::sync::Weak<StageLease>, context: std::sync::Weak<StoreContext>,
+    path: PathBuf, seen: Arc<std::sync::atomic::AtomicUsize>,
+}
+impl DropObserver {
+    fn watch(writer: &File, lease: &Arc<StageLease>, context: &Arc<StoreContext>, path: &Path,
+        seen: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        #[cfg(target_os = "macos")]
+        let number = { use std::os::unix::io::AsRawFd; writer.as_raw_fd() as usize };
+        #[cfg(target_os = "windows")]
+        let number = { use std::os::windows::io::AsRawHandle; writer.as_raw_handle() as usize };
+        Self { writer: number, lease: Arc::downgrade(lease), context: Arc::downgrade(context),
+            path: path.to_owned(), seen: Arc::clone(seen) }
+    }
+}
+impl Drop for DropObserver {
+    fn drop(&mut self) {
+        // Nothing may open a new FD/handle before this exact closed-handle probe.
+        #[cfg(target_os = "macos")]
+        {
+            let result = unsafe { hbb_common::libc::fcntl(self.writer as i32, hbb_common::libc::F_GETFD) };
+            let error = std::io::Error::last_os_error().raw_os_error();
+            assert_eq!(result, -1, "writer still open before guard release");
+            assert_eq!(error, Some(hbb_common::libc::EBADF));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::Foundation::{GetHandleInformation, GetLastError, HANDLE, ERROR_INVALID_HANDLE};
+            let mut flags = 0;
+            let result = unsafe { GetHandleInformation(HANDLE(self.writer as *mut std::ffi::c_void), &mut flags) };
+            let error = unsafe { GetLastError() };
+            assert!(result.is_err(), "writer still open before guard release");
+            assert_eq!(error, ERROR_INVALID_HANDLE);
+        }
+        assert_eq!(self.context.strong_count(), 1, "job must still own the only root guard");
+        assert_eq!(self.lease.strong_count(), 1, "job must still own the only lease guard");
+        child(&self.path, "busy");
+        self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub(super) struct CreationPause { entered: mpsc::Sender<()>, resume: Mutex<mpsc::Receiver<()>> }
 impl CreationPause {
     pub(super) fn wait(&self) -> Result<(), ()> {
@@ -152,6 +193,85 @@ fn child(path: &Path, expected: &str) {
         "ongrow_update::protected_store::tests::cross_process_stage_lock_child", "--nocapture"])
         .env("ONGROW_STORE_CHILD_ROOT", path).env("ONGROW_STORE_CHILD_EXPECT", expected).output().unwrap();
     assert!(result.status.success(), "native child failed: {}", String::from_utf8(result.stdout).unwrap());
+}
+
+fn write_input(mut pending: PendingStage) -> StageJobInput {
+    assert!(pending.work.is_none());
+    StageJobInput { writer: pending.writer.take(), observer: None, identity: pending.identity.take(),
+        operation: Operation::Write(b"must not be written".to_vec()),
+        lease: Arc::clone(&pending.lease), context: Arc::clone(&pending.context) }
+}
+fn seal_input(mut pending: PendingStage) -> WorkResult {
+    assert!(pending.work.is_none());
+    WorkResult { writer: pending.writer.take().unwrap(), observer: None, identity: pending.identity.take().unwrap(),
+        count: 0, _lease: Arc::clone(&pending.lease), _context: Arc::clone(&pending.context) }
+}
+fn tls_pending(store: &ProtectedStore) -> (PendingStage, VerifiedTransfer) {
+    run(async {
+        let mut pending = store.begin_stage().unwrap();
+        let transfer = match store.runtime.check(&mut pending, 100, store.snapshot().unwrap().state(), true).await.unwrap() {
+            CheckOutcome::Downloaded(transfer) => transfer, _ => panic!("expected original TLS transfer"),
+        };
+        (pending, transfer)
+    })
+}
+fn after_job_drop(fixture: &Fixture, seen: &Arc<std::sync::atomic::AtomicUsize>, payload: &[u8]) {
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    child(&fixture.path, "free");
+    assert_eq!(fs::read(fixture.payload()).unwrap(), payload);
+    assert!(matches!(fixture.store(false).snapshot().unwrap().state(), LastAcceptedSequence::Known(8)));
+}
+
+#[test]
+fn actual_write_closure_drop_closes_writer_before_native_guards() {
+    let fixture = Fixture::at("drop-write-job");
+    let store = fixture.store(true);
+    let pending = run(async {
+        let mut pending = store.begin_stage().unwrap();
+        pending.write_all(b"existing payload").await.unwrap();
+        pending
+    }); // The entire Tokio runtime has stopped before any raw-FD observation.
+    let mut input = write_input(pending);
+    assert!(input.writer.is_some());
+    let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    input.observer = Some(DropObserver::watch(input.writer.as_ref().unwrap(), &input.lease, &input.context, &fixture.path, &seen));
+    let job = write_job(input); // This is the production factory, not a copied closure.
+    drop(store); // No client, runtime, or extra strong root/lease reference survives.
+    drop(job);
+    after_job_drop(&fixture, &seen, b"existing payload");
+}
+
+#[test]
+fn actual_seal_closure_drop_closes_writer_before_native_guards() {
+    let fixture = Fixture::at("drop-seal-job");
+    let store = fixture.store(true);
+    let (_, _, payload) = fixture.publish(false, 9);
+    let (pending, transfer) = tls_pending(&store);
+    let mut input = seal_input(pending);
+    let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    input.observer = Some(DropObserver::watch(&input.writer, &input._lease, &input._context, &fixture.path, &seen));
+    let job = seal_job(input, transfer);
+    drop(store);
+    drop(job);
+    after_job_drop(&fixture, &seen, &payload);
+}
+
+#[test]
+fn actual_early_seal_error_closes_writer_before_native_guards() {
+    let fixture = Fixture::at("early-seal-error");
+    let store = fixture.store(true);
+    let (_, _, payload) = fixture.publish(false, 9);
+    let (pending, transfer) = tls_pending(&store);
+    let mut input = seal_input(pending);
+    let sequence = input._context.root.read(Child::Sequence).unwrap();
+    input.identity = input._context.root.identity(&sequence).unwrap();
+    drop(sequence); // All OS-handle opening is finished before recording the writer.
+    let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    input.observer = Some(DropObserver::watch(&input.writer, &input._lease, &input._context, &fixture.path, &seen));
+    let job = seal_job(input, transfer);
+    drop(store);
+    rejects(job(), Some(Error::Trust(session_gate::Error::Untrusted)));
+    after_job_drop(&fixture, &seen, &payload);
 }
 
 #[test]
