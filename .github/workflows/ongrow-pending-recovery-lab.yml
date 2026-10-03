@@ -1,0 +1,72 @@
+name: OnGROW Pending recovery exclusive lease native probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.gitattributes'
+      - 'src/ongrow_update/session_gate.rs'
+      - 'src/ongrow_update/session_gate/macos.rs'
+      - 'src/ongrow_update/session_gate/windows.rs'
+      - 'src/ongrow_update/pending_recovery_tests.rs'
+      - 'scripts/test_ongrow_pending_recovery.py'
+      - 'scripts/fixtures/ongrow_pending_recovery_probe/lib.rs'
+      - '.github/workflows/ongrow-pending-recovery-lab.yml'
+      - 'docs/ongrow-pending-recovery.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ongrow-pending-recovery-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-pending-recovery:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact trusted recovery source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source and unchanged dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code d8b2202e3e8747f949d0a94625aa02c8bfe18ce7 "$SOURCE_SHA" -- . \
+            ':(exclude)src/ongrow_update/session_gate.rs' \
+            ':(exclude)src/ongrow_update/session_gate/macos.rs' \
+            ':(exclude)src/ongrow_update/session_gate/windows.rs' \
+            ':(exclude)src/ongrow_update/pending_recovery_tests.rs' \
+            ':(exclude)scripts/test_ongrow_pending_recovery.py' \
+            ':(exclude)scripts/fixtures/ongrow_pending_recovery_probe/lib.rs' \
+            ':(exclude).github/workflows/ongrow-pending-recovery-lab.yml' \
+            ':(exclude)docs/ongrow-pending-recovery.md'
+
+      - name: Isolated probe Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: '1.81.0'
+
+      - name: Pending recovery and existing trust regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/test_ongrow_pending_recovery.py
+          python scripts/test_ongrow_update_store.py
+          python scripts/test_ongrow_update_session_gate.py
+          python scripts/test_ongrow_product_profile.py
+          python scripts/test_ongrow_ci_isolation.py
+          git diff --check

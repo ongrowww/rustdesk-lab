@@ -608,4 +608,11 @@ impl ProtectedRoot {
     #[cfg(all(test, ongrow_update_store_probe))]
     pub(super) fn fixture(path: &Path) -> Result<Self, Error> { Self::checked(path.to_owned(), Product::SupportConsole) }
 }
+impl Lock {
+    pub(super) fn require_pending(&mut self) -> Result<(), Error> {
+        if !self.exclusive { return Err(Error::Untrusted); }
+        if self.state()? != PENDING { return Err(Error::Untrusted); }
+        Ok(())
+    }
+}
 // ONGROW_STORE_ADDITIONS_END
