@@ -8,6 +8,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,31 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_update_runtime_probe"
+PUBLIC_FIXTURES = frozenset(("public.key", "manifest.json", "manifest.sig", "payload.bin"))
+
+
+def validate_public_fixtures(environment):
+    directory = environment.get("ONGROW_RELEASE_TEST_FIXTURE_DIR")
+    if directory is None:
+        if environment.get("GITHUB_ACTIONS") == "true" or environment.get("CI"):
+            raise RuntimeError("CI requires the exact public producer fixture artifact")
+        return False
+    try:
+        root = Path(directory)
+        if root.is_symlink() or not root.is_dir():
+            raise RuntimeError("Public fixture directory must be regular and not a symlink")
+        entries = list(root.iterdir())
+        if {entry.name for entry in entries} != PUBLIC_FIXTURES:
+            raise RuntimeError("Public fixture artifact must contain exactly four named files")
+        for entry in entries:
+            metadata = entry.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise RuntimeError("Public fixture files must be regular, unlinked and not symlinks")
+        if (root / "public.key").stat().st_size != 32 or (root / "manifest.sig").stat().st_size != 64:
+            raise RuntimeError("Public fixture key and signature lengths are invalid")
+    except OSError:
+        raise RuntimeError("Public fixture artifact is unavailable") from None
+    return True
 
 
 def tool_environment():
@@ -111,6 +137,80 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_workflow_public_producer_and_native_matrix_contract(self):
+        workflow = (ROOT / ".github/workflows/ongrow-update-runtime-lab.yml").read_text()
+        producer, native = workflow.split("  public-producer:\n", 1)[1].split("  native-runtime:\n", 1)
+        trusted = "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
+        self.assertIn(trusted, producer)
+        self.assertIn(trusted, native)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("secrets.", workflow)
+        for job in (producer, native):
+            self.assertIn("SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}", job)
+            self.assertIn('test "$(git rev-parse HEAD)" = "$SOURCE_SHA"', job)
+            self.assertIn("persist-credentials: false", job)
+        self.assertIn("runs-on: ubuntu-22.04", producer)
+        self.assertIn("scripts/test_ongrow_release_signing.py", producer)
+        self.assertIn('--export-fixtures-dir "$fixture_dir"', producer)
+        self.assertIn("validate_public_fixtures(os.environ)", producer)
+        self.assertIn("artifact-name=ongrow-runtime-public-%s-%s", producer)
+        self.assertIn('"$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"', producer)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", producer)
+        self.assertIn("retention-days: 1", producer)
+        self.assertIn("if-no-files-found: error", producer)
+        paths = producer.split("          path: |\n", 1)[1]
+        self.assertEqual([line.strip() for line in paths.splitlines() if line.strip()],
+                         ["${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/" + name
+                          for name in ("public.key", "manifest.json", "manifest.sig", "payload.bin")])
+        self.assertIn("needs: public-producer", native)
+        self.assertIn("os: [macos-14, windows-2022]", native)
+        self.assertIn("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", native)
+        self.assertIn("name: ${{ needs.public-producer.outputs.artifact-name }}", native)
+        self.assertIn("path: target/ongrow-runtime-public-fixtures", native)
+        self.assertIn("ONGROW_RELEASE_TEST_FIXTURE_DIR: ${{ github.workspace }}/target/ongrow-runtime-public-fixtures", native)
+        self.assertNotIn("test_ongrow_release_signing.py", native)
+        self.assertNotIn("pattern:", native)
+        self.assertNotIn("merge-multiple:", native)
+        self.assertNotIn(".pem", producer)
+
+    def test_public_fixture_artifact_validation(self):
+        with tempfile.TemporaryDirectory(prefix="ongrow-public-input-") as directory:
+            root = Path(directory)
+            values = {"public.key": bytes(32), "manifest.sig": bytes(64),
+                      "manifest.json": b"{}", "payload.bin": b"synthetic public fixture"}
+            for name, value in values.items():
+                (root / name).write_bytes(value)
+            environment = {"CI": "true", "ONGROW_RELEASE_TEST_FIXTURE_DIR": directory}
+            self.assertTrue(validate_public_fixtures(environment))
+            extra = root / "unexpected.txt"
+            extra.write_bytes(b"synthetic extra public file")
+            with self.assertRaisesRegex(RuntimeError, "exactly four"):
+                validate_public_fixtures(environment)
+            extra.unlink()
+            for name in ("public.key", "manifest.sig"):
+                (root / name).write_bytes(values[name][:-1])
+                with self.assertRaisesRegex(RuntimeError, "lengths"):
+                    validate_public_fixtures(environment)
+                (root / name).write_bytes(values[name])
+            payload = root / "payload.bin"
+            payload.unlink()
+            with self.assertRaisesRegex(RuntimeError, "exactly four"):
+                validate_public_fixtures(environment)
+            payload.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "regular"):
+                validate_public_fixtures(environment)
+            payload.rmdir()
+            if os.name == "posix":
+                payload.symlink_to(root / "manifest.json")
+                with self.assertRaisesRegex(RuntimeError, "not symlinks"):
+                    validate_public_fixtures(environment)
+                payload.unlink()
+            payload.write_bytes(values["payload.bin"])
+            self.assertTrue(validate_public_fixtures(environment))
+        with self.assertRaisesRegex(RuntimeError, "CI requires"):
+            validate_public_fixtures({"CI": "true"})
+        self.assertFalse(validate_public_fixtures({}))
+
     def test_boundaries_and_inactive_apps(self):
         source = (ROOT / "src/ongrow_update/runtime.rs").read_text()
         compact = re.sub(r"\s+", "", source)
@@ -131,6 +231,7 @@ class RuntimeTests(unittest.TestCase):
         if sys.platform not in ("darwin", "win32"):
             self.fail("Native macOS or Windows required; no silent skip")
         environment = tool_environment()
+        validate_public_fixtures(environment)
         version = subprocess.run(["rustc", "--version"], env=environment, capture_output=True, text=True, timeout=10)
         self.assertEqual(version.returncode, 0)
         self.assertTrue(version.stdout.startswith("rustc 1.81.0 "), "Exact existing Rust 1.81.0 required")

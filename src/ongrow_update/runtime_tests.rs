@@ -499,7 +499,12 @@ mod native {
                 .await,
             Err(RuntimeError::Deadline)
         ));
-        assert_eq!(f.requests().len(), 2);
+        let deadline_requests = f.requests();
+        assert!(
+            deadline_requests == ["/releases/manifest.json"]
+                || deadline_requests == ["/releases/manifest.json", "/releases/manifest.sig"],
+            "deadline must stop at a nonempty metadata-only request prefix"
+        );
         assert!(sink.is_empty());
         // Wait for the bounded server handler to finish before changing routes.
         tokio::time::sleep(Duration::from_millis(150)).await;

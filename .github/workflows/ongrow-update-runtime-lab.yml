@@ -20,8 +20,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  public-producer:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    outputs:
+      artifact-name: ${{ steps.export-public.outputs.artifact-name }}
+    steps:
+      - name: Checkout exact trusted producer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Verify checked out producer revision
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Test producer and exclusively export public synthetic fixtures
+        id: export-public
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl_tool="$(command -v openssl)"
+          test -n "$openssl_tool"
+          fixture_home="$(python3 -c 'from pathlib import Path; print(Path.home().resolve())')"
+          fixture_dir="$fixture_home/ongrow-runtime-public-${{ github.run_id }}-${{ github.run_attempt }}"
+          python3 scripts/test_ongrow_release_signing.py --openssl "$openssl_tool" --export-fixtures-dir "$fixture_dir"
+          ONGROW_RELEASE_TEST_FIXTURE_DIR="$fixture_dir" python3 -c 'import os,sys; sys.path.insert(0, "scripts"); from test_ongrow_update_runtime import validate_public_fixtures; validate_public_fixtures(os.environ)'
+          printf 'ONGROW_PUBLIC_FIXTURE_DIR=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+          printf 'artifact-name=ongrow-runtime-public-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exactly four public synthetic fixture files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.export-public.outputs.artifact-name }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/public.key
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/manifest.json
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/manifest.sig
+            ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/payload.bin
+
   native-runtime:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: public-producer
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +77,7 @@ jobs:
     timeout-minutes: 15
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ONGROW_RELEASE_TEST_FIXTURE_DIR: ${{ github.workspace }}/target/ongrow-runtime-public-fixtures
     steps:
       - name: Checkout exact trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -48,15 +96,16 @@ jobs:
         with:
           toolchain: '1.81.0'
 
+      - name: Download only this producer's public fixture artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ needs.public-producer.outputs.artifact-name }}
+          path: target/ongrow-runtime-public-fixtures
+
       - name: Run native TLS and source boundaries with public producer fixtures
         shell: bash
         run: |
           set -euo pipefail
-          openssl_tool="$(python -c 'import sys; sys.path.insert(0, "scripts"); from test_ongrow_update_runtime import openssl_tool; print(openssl_tool())')"
-          fixture_home="$(python -c 'from pathlib import Path; print(Path.home().resolve())')"
-          fixture_dir="$fixture_home/ongrow-runtime-public-${{ github.run_id }}-${{ github.run_attempt }}"
-          python scripts/test_ongrow_release_signing.py --openssl "$openssl_tool" --export-fixtures-dir "$fixture_dir"
-          export ONGROW_RELEASE_TEST_FIXTURE_DIR="$fixture_dir"
           python scripts/test_ongrow_update_runtime.py
           python scripts/test_ongrow_product_profile.py
           python scripts/test_ongrow_ci_isolation.py

@@ -96,7 +96,21 @@ Redirects ohne Kontakt zum Ziel. Sie zählen Requests und prüfen Sink-Bytes.
 Scheduler-Tests verwenden eine Fake-Uhr; Transport-Erfolg benötigt echte Requests.
 Die bestehende Manifest-Suite läuft mit. Ohne vorhandene öffentliche synthetische
 Producer-Fixtures bleibt lokale OpenSSL-Interop ausdrücklich offen. CI erzeugt
-sie mit dem vorhandenen OpenSSL 3 und liefert sie an die Original-Suite.
+sie ausschließlich im test-only Producer-Job auf `ubuntu-22.04` mit dem vorhandenen
+OpenSSL 3. Dort laufen die 26 Signierungstests und der exklusive Export. Nur
+`public.key`, `manifest.json`, `manifest.sig` und `payload.bin` werden unter einem
+Run-/Attempt-spezifischen Artefaktnamen für einen Tag hochgeladen. Die native
+Mac-/Windows-Matrix hängt von diesem Job ab und lädt genau dieses Artefakt unter
+dem ignorierten `target` herunter. Vor der Original-Suite prüft sie genau vier
+reguläre Dateien ohne Symlinks, 32 Public-Key-Bytes und 64 Signaturbytes.
+Der Producer signiert keine echten Releases. Windows bekommt keinen privaten
+Ed25519-Schlüssel und führt die POSIX-Producer-CLI nicht aus. TLS-CA und Server-Leaf
+entstehen weiterhin jeweils lokal im nativen Test außerhalb Git und Artefakten.
+
+Der Deadline-Test behält 120 ms Serververzögerung je Antwort und 200 ms Gesamtfrist.
+Je nach TLS-/Runner-Timing darf der beobachtete Request-Präfix nur das Manifest
+oder Manifest plus Signatur enthalten. Null Requests, Payload oder fremde Ziele
+sind unzulässig; das Ergebnis muss `Deadline` sein und der Sink leer bleiben.
 
 Der kleine CI-Workflow prüft `macos-14` und `windows-2022` mit exakt Rust 1.81.0,
 gepinnten Actions und einem geprüften `SOURCE_SHA`. Er akzeptiert nur interne
