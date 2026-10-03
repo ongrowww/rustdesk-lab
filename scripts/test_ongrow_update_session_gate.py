@@ -363,7 +363,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertIn(f"inspect(&{file}, &user, product, false, false)", windows)
         self.assertIn('if !ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err()', windows)
         self.assertIn('let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };', windows)
-        self.assertIn('if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor)', windows)
+        self.assertIn('if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor)', windows)
         self.assertIn('"root-volume"', windows)
         trusted = windows.split("fn trusted_sid(", 1)[1].split("\n}\n", 1)[0]
         self.assertEqual(trusted, '''sid: PSID, user: &User, product: Product, ancestor: bool) -> bool {
@@ -379,7 +379,7 @@ class SessionGateTests(unittest.TestCase):
         windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
         diagnostic = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
         self.assertIn("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", windows)
-        self.assertIn('''if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) {
+        self.assertIn('''if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor) {
             #[cfg(all(test, ongrow_session_gate_probe))]
             owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
             return Err(untrusted("forbidden-access"));
@@ -419,7 +419,7 @@ class SessionGateTests(unittest.TestCase):
                    ("WinBuiltinRemoteManagementUsersSid", "builtin-remote-management-users")]
         for sdk, category in classes:
             self.assertEqual(diagnostic.count(f'({sdk}, "{category}")'), 2)
-        for symbol in [sdk for sdk, _ in classes] + ["GetSidIdentifierAuthority", "GetSidSubAuthorityCount",
+        for symbol in [sdk for sdk, _ in classes if sdk != "WinCreatorOwnerRightsSid"] + ["GetSidIdentifierAuthority", "GetSidSubAuthorityCount",
                                                    "GetSidSubAuthority", "windows_account_form", "account_form_values"]:
             self.assertNotIn(symbol, before + after)
         classifier = diagnostic.split("    fn classify(", 1)[1].split("    pub(super) fn rejected(", 1)[0]
@@ -483,6 +483,52 @@ fn positions_are_fixed_categories() {
                            check=True, capture_output=True, text=True, timeout=180)
             result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
             self.assertIn("2 passed; 0 failed", result.stdout)
+
+    def test_owner_rights_allow_ace_uses_the_same_descriptor_owner(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        helper = windows.split("fn trusted_ace_sid(", 1)[1].split("\n// Read-only diagnostics.", 1)[0]
+        self.assertEqual(helper, '''sid: PSID, owner: PSID, user: &User, product: Product, ancestor: bool) -> bool {
+    if sid.0.is_null() || owner.0.is_null() { return false; }
+    if !unsafe { IsValidSid(sid) }.as_bool() || !unsafe { IsValidSid(owner) }.as_bool() { return false; }
+    if trusted_sid(sid, user, product, ancestor) { return true; }
+    // Owner Rights is object-bound, not a globally trusted principal. The owner
+    // comes from the same security descriptor as this ACE, never from a token group.
+    unsafe {
+        IsWellKnownSid(sid, WinCreatorOwnerRightsSid).as_bool()
+            && trusted_sid(owner, user, product, ancestor)
+            && (ancestor || product != Product::SupportConsole || EqualSid(owner, user.sid()).is_ok())
+    }
+}
+''')
+        inspect = windows.split("fn inspect(", 1)[1].split("\nfn open(", 1)[0]
+        self.assertIn('''GetSecurityInfo(handle(file), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            Some(&mut owner), None, Some(&mut dacl), None, Some(&mut descriptor.0))''', inspect)
+        owner_check = inspect.index("if !trusted_sid(owner, user, product, ancestor)")
+        exact_check = inspect.index("if !ancestor && product == Product::SupportConsole")
+        acl_loop = inspect.index("for index in 0..size.AceCount")
+        ace_check = inspect.index("if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor)")
+        self.assertLess(owner_check, exact_check)
+        self.assertLess(exact_check, acl_loop)
+        self.assertLess(acl_loop, ace_check)
+        self.assertEqual(inspect.count("trusted_ace_sid("), 1)
+        self.assertEqual(inspect.count("GetSecurityInfo("), 1)
+        self.assertIn('return Err(untrusted("forbidden-access"));', inspect[ace_check:])
+        native = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
+        self.assertIn("fn owner_rights_ace_is_bound_to_the_same_trusted_owner", native)
+        self.assertIn("CreateWellKnownSid(kind, None, Some(sid), &mut length)", native)
+        self.assertIn('ConvertStringSidToSidW(w!("S-1-3-5"), &mut near_rights.0)', native)
+        self.assertIn("assert!(!trusted_sid(rights, &user, product, ancestor))", native)
+        self.assertIn("let mut invalid_buffer = [0usize; 16]", native)
+        self.assertIn("assert!(!unsafe { IsValidSid(invalid) }.as_bool())", native)
+        for sid, owner in [("invalid", "system"), ("rights", "invalid"), ("system", "invalid")]:
+            self.assertIn(f"assert!(!trusted_ace_sid({sid}, {owner}, &user, product, ancestor))", native)
+        self.assertIn("trusted_ace_sid(rights, installer.0, &user, product, ancestor), ancestor", native)
+        self.assertIn("for owner in [foreign.0, world, services.0, rights, creator, null_sid, PSID::default()]", native)
+        self.assertIn("for sid in [foreign.0, world, services.0, creator, near_rights.0, null_sid, PSID::default()]", native)
+        self.assertIn("assert!(![rights, foreign.0].into_iter()", native)
+        self.assertIn(".all(|sid| trusted_ace_sid(sid, owner, &user, product, ancestor))", native)
+        self.assertIn('''assert_eq!(trusted_ace_sid(sid, system, &user, product, ancestor),
+                        trusted_sid(sid, &user, product, ancestor));''', native)
 
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):

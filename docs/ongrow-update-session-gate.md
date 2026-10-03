@@ -54,6 +54,26 @@ Geschwistern an Vorfahren sind zulässig, nicht Rechte zum Löschen oder
 Rekonfigurieren bestehender geschützter Kinder. Im geschützten Root und auf den
 Dateien werden sämtliche fremden Schreibrechte abgewiesen.
 
+Eine Allow-ACE mit der exakten öffentlichen Owner-Rights-SID `S-1-3-4`
+repräsentiert den aktuellen Eigentümer ihres Objekts. Sie erhält deshalb eine
+objektgebundene Prüfung gegen den Eigentümer aus demselben Security Descriptor.
+ACE-SID und Eigentümer müssen gültig und nicht NULL sein. Der Eigentümer muss
+weiterhin die unveränderte `trusted_sid`-Regel erfüllen; im geschützten
+Konsole-Bereich muss er zusätzlich exakt der aktuellen User-SID entsprechen.
+TrustedInstaller als Eigentümer erhält durch diesen Pfad keinen zusätzlichen
+Trust außerhalb der Vorfahren-Regel. Owner Rights selbst bleibt als
+Objekteigentümer untrusted und ist keine globale Gruppe vertrauenswürdiger SIDs.
+Der Creator-Owner-Platzhalter und eine ähnliche SID `S-1-3-5` werden nicht
+gleichgesetzt. Jede weitere Allow-ACE bleibt einzeln geprüft und kann weiterhin
+das gesamte Objekt blockieren.
+Microsoft beschreibt [Owner Rights](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-identifiers)
+als Bezug auf den Objekteigentümer, bei dessen ACE die impliziten Rechte
+READ_CONTROL und WRITE_DAC ignoriert werden. Die Erkennung verwendet exakt den
+[SDK-Typ WinCreatorOwnerRightsSid](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-well_known_sid_type).
+Normale ACE-SIDs behalten ihre bisherigen Trustentscheidungen. Eigentümerprüfung,
+Mutation-Masken, Reparse-/Hardlink-/Volume-Prüfungen, Handle-Lebensdauer und
+Fehlerrückgabe ändern sich nicht.
+
 ## Lebensdauer einer Sitzung
 
 Eine eingehende Verbindung nimmt vor Handshake und Wake-up eine nicht blockierende
@@ -153,7 +173,9 @@ Ein reiner Rust-Kategorisierungstest prüft alle 1024 Bitkombinationen, die
 Nullmaske, Bits außerhalb der Mutation-Masken und beide Hierarchiestufen.
 Die Python-Suite kompiliert und führt denselben std-only Helper samt Test auch
 ohne Windows-API aus. Die vorhandenen SID-Tests prüfen weiterhin die NULL-SID.
-Ablehnungsbedingung, Mutation-Masken, Trust-Prüfung und Rückgabe bleiben gleich.
+Die Diagnoseausgabe selbst ändert keine Ablehnungsentscheidung.
+Mutation-Masken, globale SID-Trust-Prüfung und Rückgabe bleiben gleich; die
+objektgebundene Owner-Rights-Auswertung ist oben beschrieben.
 
 Bei abgewiesenem Eigentümer ergänzt ausschließlich die Windows-Probe eine feste
 Klasse `system`, `admins`, `builtin-users`, `everyone`, `creator-owner`,
@@ -187,7 +209,9 @@ Das SDK [validiert den Subautoritätsindex nicht selbst](https://learn.microsoft
 Domainanteile und Konto-RID liest, speichert oder protokolliert die Probe nicht.
 Die Form unterscheidet weder lokale SAM- von AD-Konten noch Benutzer von Gruppen.
 Alle sieben neuen Klassen und eine vollständig synthetische Kontoform bleiben
-für beide Produkte an Vorfahren und geschützten Objekten untrusted. SDK-Tests
+als eigenständige Principals für beide Produkte an Vorfahren und geschützten
+Objekten untrusted. Die Owner-Rights-ACE wird separat an den tatsächlichen
+Objekteigentümer gebunden. SDK-Tests
 konstruieren diese SIDs tatsächlich und prüfen ähnliche Formen, NULL und Null-SID.
 Die Python-Suite führt den originalen std-only Strukturhelper samt Grenztests
 und die originale Positionsausdruckslogik auch ohne Windows-API aus.
@@ -231,8 +255,20 @@ ACE hat Klasse `other` und die maskierten Rechte `delete`, `delete-child`,
 `write-dac`, `write-owner`, `write-attributes` und `write-ea`. Die separate
 Owner-Prüfung hat zuvor bestanden. Die Ausgabe ist kein Effective-Access-Ergebnis
 und begründet keine Trust-Erweiterung. Der macOS-Job besteht.
-Die erweiterten Kategorien sollen den unbekannten Principal eingrenzen.
-Ihr nativer Windows-Nachweis und der Windows-Lock-Nachweis bleiben offen.
+[Lauf 37111209826](https://github.com/ongrowww/rustdesk-lab/actions/runs/37111209826)
+auf Basis `504568b9` besteht die sechs Windows-SDK-/Kategorisierungs- und
+Default-off-Tests sowie den macOS-Job. Alle acht Windows-Lock-Fixtures scheitern
+weiterhin. Die abgewiesene ACE ist nun als `owner-rights` am `direct-parent`
+belegt, nach bereits akzeptiertem Objekteigentümer. Dieser Befund begründet die
+enge objektgebundene Auswertung, keinen Gruppen- oder Präfixtrust.
+Ein zusätzlicher SDK-Test prüft SYSTEM-/Admin-/TrustedInstaller-/Current-User-
+Eigentümer für beide Produkte und Hierarchiestufen, untrusted und NULL-Eigentümer,
+vollständig allokierte ausgerichtete Revision-0-SIDs als ungültige ACE/Eigentümer,
+Creator Owner und ähnliche SIDs sowie eine separate fremde Allow-ACE neben einer
+gültigen Owner-Rights-ACE. Er verändert keine tatsächlichen Host-ACLs.
+Der native Windows-Nachweis dieses Fixes und erfolgreiche Windows-Lock-Fixtures
+bleiben offen. Das Paket aktiviert weiterhin weder Gate noch App-Updater und
+implementiert keinen Installer- oder Staging-Schritt.
 
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte

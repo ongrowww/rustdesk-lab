@@ -15,7 +15,7 @@ use windows::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
             DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION,
             PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
-            WinBuiltinAdministratorsSid, WinLocalSystemSid,
+            WinBuiltinAdministratorsSid, WinLocalSystemSid, WinCreatorOwnerRightsSid,
         },
         Storage::FileSystem::{
             GetDriveTypeW, GetFileInformationByHandle, LockFileEx, UnlockFileEx,
@@ -87,6 +87,18 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, ancestor: bool) -> bool
             || (ancestor && trusted_installer().map(|installer| EqualSid(sid, installer.0).is_ok()).unwrap_or(false))
     }
 }
+fn trusted_ace_sid(sid: PSID, owner: PSID, user: &User, product: Product, ancestor: bool) -> bool {
+    if sid.0.is_null() || owner.0.is_null() { return false; }
+    if !unsafe { IsValidSid(sid) }.as_bool() || !unsafe { IsValidSid(owner) }.as_bool() { return false; }
+    if trusted_sid(sid, user, product, ancestor) { return true; }
+    // Owner Rights is object-bound, not a globally trusted principal. The owner
+    // comes from the same security descriptor as this ACE, never from a token group.
+    unsafe {
+        IsWellKnownSid(sid, WinCreatorOwnerRightsSid).as_bool()
+            && trusted_sid(owner, user, product, ancestor)
+            && (ancestor || product != Product::SupportConsole || EqualSid(owner, user.sid()).is_ok())
+    }
+}
 
 // Read-only diagnostics. Nothing in this module is available to product code.
 #[cfg(all(test, ongrow_session_gate_probe))]
@@ -94,7 +106,7 @@ mod owner_diagnostics {
     use super::*;
     use windows::Win32::Security::{
         WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
-        WinAuthenticatedUserSid, WinCreatorOwnerRightsSid, WinBuiltinGuestsSid, WinBuiltinPowerUsersSid,
+        WinAuthenticatedUserSid, WinBuiltinGuestsSid, WinBuiltinPowerUsersSid,
         WinBuiltinBackupOperatorsSid, WinBuiltinRemoteDesktopUsersSid, WinBuiltinRemoteManagementUsersSid,
         GetSidIdentifierAuthority, GetSidSubAuthorityCount, GetSidSubAuthority,
     };
@@ -287,6 +299,70 @@ mod owner_diagnostics {
             }
         }
     }
+
+    #[test]
+    fn owner_rights_ace_is_bound_to_the_same_trusted_owner() {
+        use windows::Win32::Security::{CreateWellKnownSid, WinNullSid};
+        let user = User::current().unwrap();
+        let mut public = [WinCreatorOwnerRightsSid, WinLocalSystemSid, WinBuiltinAdministratorsSid,
+            WinWorldSid, WinCreatorOwnerSid, WinNullSid].map(|kind| {
+            let mut buffer = vec![0usize; 16];
+            let sid = PSID(buffer.as_mut_ptr().cast());
+            let mut length = std::mem::size_of_val(buffer.as_slice()) as u32;
+            unsafe { CreateWellKnownSid(kind, None, Some(sid), &mut length) }.unwrap();
+            buffer
+        });
+        let [rights, system, admins, world, creator, null_sid] = public.each_mut()
+            .map(|buffer| PSID(buffer.as_mut_ptr().cast()));
+        let installer = trusted_installer().unwrap();
+        let services = all_services().unwrap();
+        let mut foreign = AllocatedSid(PSID::default());
+        let mut near_rights = AllocatedSid(PSID::default());
+        unsafe { ConvertStringSidToSidW(w!("S-1-5-21-1-2-3-4"), &mut foreign.0) }.unwrap();
+        unsafe { ConvertStringSidToSidW(w!("S-1-3-5"), &mut near_rights.0) }.unwrap();
+        assert!(unsafe { IsValidSid(foreign.0) }.as_bool());
+        assert!(unsafe { IsValidSid(near_rights.0) }.as_bool());
+        // Fully allocated and aligned, but invalid revision 0. Never a dangling pointer.
+        let mut invalid_buffer = [0usize; 16];
+        let invalid = PSID(invalid_buffer.as_mut_ptr().cast());
+        assert!(!unsafe { IsValidSid(invalid) }.as_bool());
+        let privileged_user = unsafe { IsWellKnownSid(user.sid(), WinLocalSystemSid).as_bool()
+            || IsWellKnownSid(user.sid(), WinBuiltinAdministratorsSid).as_bool() };
+        for product in [Product::CustomerDesk, Product::SupportConsole] {
+            for ancestor in [false, true] {
+                // Owner Rights remains invalid as a standalone object owner.
+                assert!(!trusted_sid(rights, &user, product, ancestor));
+                assert!(!trusted_ace_sid(invalid, system, &user, product, ancestor));
+                assert!(!trusted_ace_sid(rights, invalid, &user, product, ancestor));
+                assert!(!trusted_ace_sid(system, invalid, &user, product, ancestor));
+                for owner in [system, admins] {
+                    let expected = product == Product::CustomerDesk || ancestor
+                        || unsafe { EqualSid(owner, user.sid()) }.is_ok();
+                    assert_eq!(trusted_ace_sid(rights, owner, &user, product, ancestor), expected);
+                }
+                assert_eq!(trusted_ace_sid(rights, installer.0, &user, product, ancestor), ancestor);
+                assert_eq!(trusted_ace_sid(rights, user.sid(), &user, product, ancestor),
+                    privileged_user || product == Product::SupportConsole);
+                let owner = if product == Product::SupportConsole { user.sid() } else { system };
+                assert!(trusted_ace_sid(rights, owner, &user, product, ancestor));
+                // A valid Owner Rights ACE never bypasses a separate foreign Allow ACE.
+                assert!(![rights, foreign.0].into_iter()
+                    .all(|sid| trusted_ace_sid(sid, owner, &user, product, ancestor)));
+                for owner in [foreign.0, world, services.0, rights, creator, null_sid, PSID::default()] {
+                    assert!(!trusted_ace_sid(rights, owner, &user, product, ancestor));
+                }
+                for sid in [foreign.0, world, services.0, creator, near_rights.0, null_sid, PSID::default()] {
+                    assert!(!trusted_ace_sid(sid, system, &user, product, ancestor));
+                }
+                // Every ordinary ACE keeps the original global SID decision.
+                for sid in [system, admins, user.sid(), installer.0, foreign.0, world, services.0,
+                    creator, near_rights.0, null_sid, PSID::default()] {
+                    assert_eq!(trusted_ace_sid(sid, system, &user, product, ancestor),
+                        trusted_sid(sid, &user, product, ancestor));
+                }
+            }
+        }
+    }
 }
 
 fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor: bool) -> Result<(), Error> {
@@ -328,7 +404,7 @@ fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor
         // or reconfiguring existing protected children. The protected root and
         // both files reject any foreign write capability.
         let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };
-        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) {
+        if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor) {
             #[cfg(all(test, ongrow_session_gate_probe))]
             owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
             return Err(untrusted("forbidden-access"));
