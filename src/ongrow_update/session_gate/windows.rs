@@ -6,12 +6,12 @@ use std::{
     path::{Component, Path, PathBuf, Prefix},
 };
 use windows::{
-    core::PCWSTR,
+    core::{w, PCWSTR},
     Win32::{
         Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
         Security::{
-            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
-            EqualSid, GetAce, GetAclInformation, GetTokenInformation, IsWellKnownSid,
+            Authorization::{ConvertStringSidToSidW, GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetAce, GetAclInformation, GetTokenInformation, IsValidSid, IsWellKnownSid,
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
             DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION,
             PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
@@ -66,12 +66,25 @@ impl User {
     }
     fn sid(&self) -> PSID { unsafe { (*(self.0.as_ptr().cast::<TOKEN_USER>())).User.Sid } }
 }
-fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> bool {
+struct AllocatedSid(PSID);
+impl Drop for AllocatedSid {
+    fn drop(&mut self) { unsafe { let _ = LocalFree(Some(HLOCAL(self.0.0))); } }
+}
+fn trusted_installer() -> Option<AllocatedSid> {
+    let mut value = AllocatedSid(PSID::default());
+    // Exact public TrustedInstaller SID from Microsoft's WindowsAppSDK
+    // ApplicationData specification, Machine Path/Folder. Ancestors only.
+    unsafe { ConvertStringSidToSidW(w!("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"), &mut value.0) }.ok()?;
+    if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
+    Some(value)
+}
+fn trusted_sid(sid: PSID, user: &User, product: Product, ancestor: bool) -> bool {
     if sid.0.is_null() { return false; }
     unsafe {
         IsWellKnownSid(sid, WinLocalSystemSid).as_bool()
             || IsWellKnownSid(sid, WinBuiltinAdministratorsSid).as_bool()
             || (product == Product::SupportConsole && EqualSid(sid, user.sid()).is_ok())
+            || (ancestor && trusted_installer().map(|installer| EqualSid(sid, installer.0).is_ok()).unwrap_or(false))
     }
 }
 
@@ -79,23 +92,10 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> boo
 #[cfg(all(test, ongrow_session_gate_probe))]
 mod owner_diagnostics {
     use super::*;
-    use windows::{core::w, Win32::Security::{
-        Authorization::ConvertStringSidToSidW, IsValidSid,
+    use windows::Win32::Security::{
         WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
-    }};
+    };
 
-    struct AllocatedSid(PSID);
-    impl Drop for AllocatedSid {
-        fn drop(&mut self) { unsafe { let _ = LocalFree(Some(HLOCAL(self.0.0))); } }
-    }
-    fn trusted_installer() -> Option<AllocatedSid> {
-        let mut value = AllocatedSid(PSID::default());
-        // Exact public TrustedInstaller SID from Microsoft's WindowsAppSDK
-        // ApplicationData specification, Machine Path/Folder. Classification only.
-        unsafe { ConvertStringSidToSidW(w!("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"), &mut value.0) }.ok()?;
-        if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
-        Some(value)
-    }
     fn all_services() -> Option<AllocatedSid> {
         let mut value = AllocatedSid(PSID::default());
         // Exact public All Services identity, not a prefix match for services.
@@ -125,16 +125,22 @@ mod owner_diagnostics {
     }
 
     #[test]
-    fn diagnostic_categories_never_grant_service_trust() {
+    fn diagnostic_categories_follow_ancestor_only_service_trust() {
         use windows::Win32::Security::{CreateWellKnownSid, WinNullSid};
         let user = User::current().unwrap();
         let installer = trusted_installer().unwrap();
+        assert_eq!(classify(installer.0, &user), "trusted-installer");
+        for product in [Product::CustomerDesk, Product::SupportConsole] {
+            assert!(trusted_sid(installer.0, &user, product, true));
+            // Protected root, gate and journal all pass ancestor=false.
+            assert!(!trusted_sid(installer.0, &user, product, false));
+        }
         let services = all_services().unwrap();
         // Synthetic service SID differs only in the last subauthority. No prefix trust.
         let mut other_service = AllocatedSid(PSID::default());
         unsafe { ConvertStringSidToSidW(w!("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478465"), &mut other_service.0) }.unwrap();
         assert!(unsafe { IsValidSid(other_service.0) }.as_bool());
-        for (sid, category) in [(installer.0, "trusted-installer"), (services.0, "all-services"), (other_service.0, "other")] {
+        for (sid, category) in [(services.0, "all-services"), (other_service.0, "other")] {
             assert_eq!(classify(sid, &user), category);
             for product in [Product::CustomerDesk, Product::SupportConsole] {
                 for ancestor in [false, true] { assert!(!trusted_sid(sid, &user, product, ancestor)); }
@@ -149,12 +155,25 @@ mod owner_diagnostics {
             let mut length = std::mem::size_of_val(&buffer) as u32;
             unsafe { CreateWellKnownSid(kind, None, Some(sid), &mut length) }.unwrap();
             assert_eq!(classify(sid, &user), category);
+            for product in [Product::CustomerDesk, Product::SupportConsole] {
+                for ancestor in [false, true] {
+                    assert_eq!(trusted_sid(sid, &user, product, ancestor), matches!(category, "system" | "admins"));
+                }
+            }
         }
         let expected_user = public_classes.iter().take(7)
             .find(|(kind, _)| unsafe { IsWellKnownSid(user.sid(), *kind) }.as_bool())
             .map(|(_, category)| *category).unwrap_or("current-user");
         assert_eq!(classify(user.sid(), &user), expected_user);
         assert_eq!(classify(PSID::default(), &user), "other");
+        let privileged_user = unsafe { IsWellKnownSid(user.sid(), WinLocalSystemSid).as_bool()
+            || IsWellKnownSid(user.sid(), WinBuiltinAdministratorsSid).as_bool() };
+        for product in [Product::CustomerDesk, Product::SupportConsole] {
+            for ancestor in [false, true] {
+                assert_eq!(trusted_sid(user.sid(), &user, product, ancestor), privileged_user || product == Product::SupportConsole);
+                assert!(!trusted_sid(PSID::default(), &user, product, ancestor));
+            }
+        }
     }
 }
 
