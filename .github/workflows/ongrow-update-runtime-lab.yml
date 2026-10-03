@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - '.gitattributes'
       - '.github/workflows/ongrow-update-runtime-lab.yml'
       - 'src/ongrow_update/**'
       - 'scripts/test_ongrow_update_runtime.py'
+      - 'scripts/test_ongrow_update_store.py'
       - 'scripts/fixtures/ongrow_update_runtime_probe/**'
       - 'scripts/ongrow_release_signing.py'
       - 'scripts/test_ongrow_release_signing.py'

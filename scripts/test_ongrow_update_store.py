@@ -46,6 +46,83 @@ def addition(path, expected):
 
 
 class SourceTests(unittest.TestCase):
+    def test_autocrlf_checkout_preserves_exact_protected_source_bytes(self):
+        environment = {name: value for name, value in os.environ.items()
+                       if not name.upper().startswith("GIT_")}
+        environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                           GIT_ATTR_NOSYSTEM="1")
+        target = ROOT / "target/ongrow-update-store-checkout"
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="checkout-", dir=target) as directory:
+            scratch = Path(directory)
+            hooks, template, checkout = (scratch / name for name in ("hooks", "template", "repo"))
+            for path in (hooks, template, checkout):
+                path.mkdir()
+
+            def git(cwd, *arguments):
+                return subprocess.run(
+                    ["git", "-c", "core.attributesFile=" + os.devnull,
+                     "-c", "core.hooksPath=" + str(hooks), "-c", "commit.gpgSign=false",
+                     "-c", "tag.gpgSign=false", "-c", "user.name=Fixture",
+                     "-c", "user.email=fixture@example.invalid", *arguments],
+                    cwd=cwd, env=environment, capture_output=True, timeout=30, check=True)
+
+            canonical = {}
+            for name in ORIGINAL:
+                relative = "src/ongrow_update/" + name
+                raw = git(ROOT, "show", "HEAD:" + relative).stdout
+                raw.decode("utf-8", errors="strict")
+                self.assertNotIn(b"\r\n", raw)
+                canonical[relative] = raw
+            git(checkout, "init", "--template=" + str(template))
+            git(checkout, "config", "core.autocrlf", "true")
+            attributes = (ROOT / ".gitattributes").read_bytes()
+            attributes.decode("utf-8", errors="strict")
+            files = {**canonical, ".gitattributes": attributes, "control.rs": b"// checkout control\n"}
+            for relative, raw in files.items():
+                path = checkout / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+            git(checkout, "add", "--", *files)
+            for relative in files:
+                (checkout / relative).unlink()
+            git(checkout, "checkout-index", "--all", "--force")
+            self.assertEqual((checkout / "control.rs").read_bytes(), b"// checkout control\r\n")
+            for name, digest in ORIGINAL.items():
+                relative = "src/ongrow_update/" + name
+                with self.subTest(source=name):
+                    self.assertEqual((checkout / relative).read_bytes(), canonical[relative])
+                    addition(checkout / relative, digest)
+
+    def assert_rejected_source(self, transform, message):
+        with tempfile.TemporaryDirectory(prefix="ongrow-store-source-") as directory:
+            for name, digest in ORIGINAL.items():
+                with self.subTest(source=name):
+                    path = Path(directory) / "source.rs"
+                    path.write_bytes(transform((ROOT / "src/ongrow_update" / name).read_bytes()))
+                    with self.assertRaisesRegex(AssertionError, message):
+                        addition(path, digest)
+
+    def test_crlf_source_is_rejected_without_normalization(self):
+        self.assert_rejected_source(lambda raw: raw.replace(b"\n", b"\r\n"),
+                                    "Exactly one full-line addition marker pair required")
+
+    def test_changed_bytes_outside_addition_are_rejected(self):
+        self.assert_rejected_source(lambda raw: b"// changed original bytes\n" + raw,
+                                    "Original source bytes changed outside additive block")
+
+    def test_duplicate_addition_markers_are_rejected(self):
+        for marker in (b"// ONGROW_STORE_ADDITIONS_BEGIN\n", b"// ONGROW_STORE_ADDITIONS_END\n"):
+            with self.subTest(marker=marker):
+                self.assert_rejected_source(lambda raw: raw + marker,
+                                            "Exactly one full-line addition marker pair required")
+
+    def test_missing_addition_markers_are_rejected(self):
+        for marker in (b"// ONGROW_STORE_ADDITIONS_BEGIN\n", b"// ONGROW_STORE_ADDITIONS_END\n"):
+            with self.subTest(marker=marker):
+                self.assert_rejected_source(lambda raw: raw.replace(marker, b""),
+                                            "Exactly one full-line addition marker pair required")
+
     def test_original_hashes_and_reused_trust(self):
         blocks = {name: addition(ROOT / "src/ongrow_update" / name, digest)
                   for name, digest in ORIGINAL.items()}
@@ -146,6 +223,10 @@ class SourceTests(unittest.TestCase):
         self.assertIn("python scripts/test_ongrow_update_session_gate.py", runtime)
         self.assertIn("python scripts/test_ongrow_update_store.py --source-only", runtime)
         self.assertIn('git diff --exit-code a620d13809b94cc2baa06bf77a4a741769ef413f "$SOURCE_SHA"', runtime)
+        for active in (workflow, runtime):
+            paths = active.split("    paths:\n", 1)[1].split("\npermissions:", 1)[0]
+            self.assertIn("      - '.gitattributes'\n", paths)
+            self.assertIn("      - 'scripts/test_ongrow_update_store.py'\n", paths)
 
 
 class NativeTests(unittest.TestCase):

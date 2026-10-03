@@ -74,6 +74,20 @@ gecachten Rust 1.81.0 und Offline-Cargo. `--source-only` prüft die vier exakten
 Originalhashes, feste Namen, private Grenzen und CI-Vertrag. Fehlende Tools,
 Testeingaben oder nicht entdeckte Fälle sind Fehler, keine grünen Skips.
 
+Die vier bytegeprüften Quellen `session_gate.rs`, `session_gate/macos.rs`,
+`session_gate/windows.rs` und `runtime.rs` unter `src/ongrow_update/` haben
+explizit `text eol=lf` in `.gitattributes`. Die übrigen Quellen behalten
+`* text=auto`. Der Harness prüft weiter tatsächliche Worktreebytes, ohne
+Zeilenenden zu normalisieren oder die Originalhashes zu ändern.
+Eine isolierte Git-Fixture mit `core.autocrlf=true` verwendet die vier
+kanonischen HEAD-Blobs und die aktuellen Worktree-Attribute. Ein neuer
+Checkout muss diese Quellen byteidentisch mit LF erzeugen, während eine
+neutrale Kontrolldatei CRLF erhält. Künstliche CRLF-Quellen, Byteänderungen
+außerhalb der Addition sowie doppelte oder fehlende Marker müssen scheitern.
+Beide CI-Workflows reagieren auch auf `.gitattributes` und diesen Source-Harness.
+Der lokale Checkout-Test ersetzt keine neue native Windows-CI-Matrix für
+denselben geprüften Commit.
+
 Echte Loopback-TLS-Requests durchlaufen die unveränderte Runtime. Temporäre
 CA/Leaf-Schlüssel entstehen außerhalb Git und werden weder geloggt noch als
 Artefakte übertragen. Console-Manifeste signiert ein frischer Ed25519-Key im
