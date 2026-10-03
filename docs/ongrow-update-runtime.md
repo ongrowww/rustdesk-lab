@@ -124,10 +124,14 @@ Der kleine CI-Workflow prüft `macos-14` und `windows-2022` mit exakt Rust 1.81.
 gepinnten Actions und einem geprüften `SOURCE_SHA`. Er akzeptiert nur interne
 PR-Heads oder Dispatch, hat nur `contents: read`, nutzt keine Secrets und baut
 weder Flutter/VCPKG noch echte Apps. Er lädt keine TLS-Key-Artefakte hoch.
-Windows-Nachweis bleibt bis zu einem tatsächlich bestandenen CI-Lauf offen.
+Der von Root geprüfte Runtime-Lauf `37119372634` auf
+`252f3fb4d7bd8b46b2479160b8758f462a96e7b3` bestand den Linux-Producer sowie die
+native macOS- und Windows-Suite. Der separat geprüfte Gate-Lauf `37120142020` auf
+`6fd79c06214f7ab2939748a0ae2fa8b8c1653422` bestand macOS und Windows. Diese
+Nachweise aktivieren keine App und bestätigen weder Installer noch Gesamtupdater.
 
 Die CI-Unverändertprüfung vergleicht den expliziten `SOURCE_SHA` mit dem
-reviewten Gate-Parent `bb931d2a0b080e2d5123d17c243e5effe0c89f1b`. Cargo-Dateien,
+reviewten Gate-Parent `6fd79c06214f7ab2939748a0ae2fa8b8c1653422`. Cargo-Dateien,
 Gate-Quellen, native Fixtures, Prüfskript, Dokumentation und Gate-Workflow müssen
 diesem Parent entsprechen. Die Runtime-Änderung umfasst nur die acht eigenen
 Dateien. Der frühere Ausgangsstand ist kein Ersatz für diese Parent-Grenze.
