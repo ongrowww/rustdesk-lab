@@ -106,6 +106,23 @@ ausschließlich auf dem separaten Windows-Runner. Dessen temporäre Lockdatei
 bleiben unverändert. Weder RustDesk noch Dienst, Netzwerk oder Kundenregistrierung
 werden gestartet.
 
+Die Windows-State-Fixture liegt als neues eindeutiges temporäres Verzeichnis
+direkt unter dem tatsächlichen `FOLDERID_LocalAppData` des aktuellen
+Prozess-Users, nicht im allgemeinen Runner-TEMP oder einem Produktverzeichnis.
+Die Python-Probe ermittelt den Elternpfad ausschließlich mit
+[`SHGetKnownFolderPath`](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath),
+`KF_FLAG_DEFAULT` und NULL-Token. Der SDK-Speicher wird auch bei Fehlern über
+`CoTaskMemFree` freigegeben. Es gibt keinen Umgebungsvariablen- oder TEMP-Fallback.
+Vor jedem Scratch- oder State-Schreibzugriff verlangt sie einen absoluten
+lokalen Diskpfad, `DRIVE_FIXED` und vorhandene Verzeichniskomponenten ohne
+Reparse-Attribut. UNC, relative Pfade und API-Fehler blockieren. Die Probe läuft
+weiterhin nur mit `GITHUB_ACTIONS=true` unter Windows und gibt ausschließlich
+feste Fehlerkategorien aus. Sie ändert weder vorhandene Eigentümer noch ACLs
+oder Berechtigungen; Cleanup betrifft nur ihr neu erzeugtes temporäres
+Verzeichnis. Der native Gate-Code prüft danach erneut die vollständige
+Eigentümer-, ACL- und Pfadhierarchie. Portable Fake-API-Tests prüfen auch den
+Abbruch vor Verzeichniserstellung und die Speicherfreigabe im Fehlerfall.
+
 Nur dieser isolierte Compileraufruf setzt `--cfg ongrow_session_gate_probe`.
 Die Fixture verweigert ohne diesen Marker das Kompilieren. Normale App-Tests
 entdecken ausschließlich den Default-off-Policy-Test, nicht die nativen
@@ -155,7 +172,13 @@ auf Basis `af58da41` kompiliert und besteht den SID-Klassentest unter Windows.
 Alle acht Lock-Fixtures scheitern dagegen mit `trusted-installer`, `owner-trust`
 und `root-volume`. Der macOS-Job besteht. Dieser Beleg begründet die begrenzte
 Vorfahren-Regel, keinen pauschalen Trust für Eltern oder Service-SIDs.
-Der native Windows-Nachweis für die korrigierte Regel ist noch offen.
+Der [Folgelauf 37107498261](https://github.com/ongrowww/rustdesk-lab/actions/runs/37107498261)
+auf Basis `d6a36a25` kompiliert und besteht den erweiterten SID-Klassentest.
+Die acht Windows-Lock-Fixtures scheitern mit `forbidden-access` und `ancestor`.
+Welcher Principal oder ACE dies verursacht, ist damit nicht belegt. Die neue
+Platzierung unter dem OS-Konsole-Elternpfad ist eine Probe-Hypothese, keine
+weitere Trust-Ausnahme. Der native Windows-Lock-Nachweis mit dieser Platzierung
+bleibt offen.
 
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte
