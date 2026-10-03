@@ -541,3 +541,71 @@ fn initialize_at(path: &Path, product: Product) -> Result<(), Error> {
 pub(super) fn fixture_initialize(path: &Path) -> Result<(), Error> { initialize_at(path, Product::SupportConsole) }
 #[cfg(test)]
 pub(super) fn fixture_acquire(path: &Path, exclusive: bool) -> Result<Lock, Error> { acquire(path, Product::SupportConsole, exclusive) }
+// ONGROW_STORE_ADDITIONS_BEGIN
+use super::store_handles::Child;
+
+pub(super) struct ProtectedRoot { path: PathBuf, _directories: Vec<File>, user: User, product: Product }
+#[derive(PartialEq, Eq)]
+pub(super) struct StoreFileIdentity(u32, u32, u32);
+pub(super) struct StoreLock { file: File }
+fn store_lock_offset() -> OVERLAPPED {
+    let mut offset = OVERLAPPED::default();
+    // Access only the documented Offset member of the initialized union.
+    unsafe { offset.Anonymous.Anonymous.Offset = 1; }
+    offset
+}
+impl Drop for StoreLock {
+    fn drop(&mut self) { unsafe { let _ = UnlockFileEx(handle(&self.file), None, 1, 0, &mut store_lock_offset()); } }
+}
+impl ProtectedRoot {
+    pub(super) fn open(product: Product) -> Result<Self, Error> { Self::checked(root(product)?, product) }
+    fn checked(path: PathBuf, product: Product) -> Result<Self, Error> {
+        let user = User::current()?;
+        let directories = directory(&path, &user, product)?;
+        Ok(Self { path, _directories: directories, user, product })
+    }
+    fn checked_child(&self, child: Child, create: bool) -> Result<File, Error> {
+        let parent = self._directories.last().ok_or(Error::Untrusted)?;
+        inspect(parent, &self.user, self.product, true, false)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(create).create_new(create)
+            .share_mode(1)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0
+                | if create { windows::Win32::Storage::FileSystem::FILE_FLAG_WRITE_THROUGH.0 } else { 0 });
+        let file = options.open(self.path.join(child.name())).map_err(|error|
+            if error.kind() == std::io::ErrorKind::NotFound { Error::MissingGate } else { Error::Untrusted })?;
+        inspect(&file, &self.user, self.product, false, false)?;
+        Ok(file)
+    }
+    pub(super) fn create(&self, child: Child) -> Result<File, Error> { self.checked_child(child, true) }
+    pub(super) fn read(&self, child: Child) -> Result<File, Error> { self.checked_child(child, false) }
+    pub(super) fn identity(&self, file: &File) -> Result<StoreFileIdentity, Error> {
+        inspect(file, &self.user, self.product, false, false)?;
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(handle(file), &mut information) }.map_err(|_| Error::Io)?;
+        Ok(StoreFileIdentity(information.dwVolumeSerialNumber, information.nFileIndexHigh, information.nFileIndexLow))
+    }
+    pub(super) fn sync_file(&self, file: &File) -> Result<(), Error> {
+        self.identity(file)?;
+        file.sync_all().map_err(|_| Error::Io)
+    }
+    pub(super) fn sync_directory(&self) -> Result<(), Error> {
+        // New files use WRITE_THROUGH and are flushed before this validation.
+        // Do not request volume access or mutate directory security to flush it.
+        inspect(self._directories.last().ok_or(Error::Untrusted)?, &self.user, self.product, true, false)
+    }
+    pub(super) fn stage_lease(&self) -> Result<StoreLock, Error> {
+        // Lock beyond the version byte. Independent snapshot handles can read
+        // byte zero, but every stage process contends on exactly offset one.
+        let file = self.checked_child(Child::StageLock, false)?;
+        if file.metadata().map_err(|_| Error::Io)?.len() != 1 { return Err(Error::Untrusted); }
+        let flags = LOCK_FILE_FLAGS(LOCKFILE_FAIL_IMMEDIATELY.0 | LOCKFILE_EXCLUSIVE_LOCK.0);
+        if let Err(error) = unsafe { LockFileEx(handle(&file), flags, None, 1, 0, &mut store_lock_offset()) } {
+            return Err(if error.code().0 as u32 == 0x8007_0021 { Error::Busy } else { Error::Io });
+        }
+        Ok(StoreLock { file })
+    }
+    #[cfg(all(test, ongrow_update_store_probe))]
+    pub(super) fn fixture(path: &Path) -> Result<Self, Error> { Self::checked(path.to_owned(), Product::SupportConsole) }
+}
+// ONGROW_STORE_ADDITIONS_END

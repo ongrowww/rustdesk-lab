@@ -1,1 +1,5 @@
 * text=auto
+src/ongrow_update/session_gate.rs text eol=lf
+src/ongrow_update/session_gate/macos.rs text eol=lf
+src/ongrow_update/session_gate/windows.rs text eol=lf
+src/ongrow_update/runtime.rs text eol=lf

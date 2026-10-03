@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - '.gitattributes'
       - '.github/workflows/ongrow-update-runtime-lab.yml'
       - 'src/ongrow_update/**'
       - 'scripts/test_ongrow_update_runtime.py'
+      - 'scripts/test_ongrow_update_store.py'
       - 'scripts/fixtures/ongrow_update_runtime_probe/**'
       - 'scripts/ongrow_release_signing.py'
       - 'scripts/test_ongrow_release_signing.py'
@@ -107,10 +109,12 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/test_ongrow_update_runtime.py
+          python scripts/test_ongrow_update_session_gate.py
+          python scripts/test_ongrow_update_store.py --source-only
           python scripts/test_ongrow_product_profile.py
           python scripts/test_ongrow_ci_isolation.py
-          git diff --exit-code 6fd79c06214f7ab2939748a0ae2fa8b8c1653422 "$SOURCE_SHA" -- \
-            Cargo.toml Cargo.lock src/ongrow_update/session_gate.rs src/ongrow_update/session_gate \
+          git diff --exit-code a620d13809b94cc2baa06bf77a4a741769ef413f "$SOURCE_SHA" -- \
+            Cargo.toml Cargo.lock \
             src/ongrow_update/session_gate_tests.rs scripts/test_ongrow_update_session_gate.py \
             scripts/fixtures/ongrow_session_gate_probe docs/ongrow-update-session-gate.md \
             .github/workflows/ongrow-update-session-gate-lab.yml

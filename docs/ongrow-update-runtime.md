@@ -131,10 +131,15 @@ native macOS- und Windows-Suite. Der separat geprüfte Gate-Lauf `37120142020` a
 Nachweise aktivieren keine App und bestätigen weder Installer noch Gesamtupdater.
 
 Die CI-Unverändertprüfung vergleicht den expliziten `SOURCE_SHA` mit dem
-reviewten Gate-Parent `6fd79c06214f7ab2939748a0ae2fa8b8c1653422`. Cargo-Dateien,
-Gate-Quellen, native Fixtures, Prüfskript, Dokumentation und Gate-Workflow müssen
-diesem Parent entsprechen. Die Runtime-Änderung umfasst nur die acht eigenen
-Dateien. Der frühere Ausgangsstand ist kein Ersatz für diese Parent-Grenze.
+reviewten integrierten Parent `a620d13809b94cc2baa06bf77a4a741769ef413f`.
+Cargo-Dateien, Gate-Tests, native Gate-Fixtures, Gate-Prüfskript, Gate-Dokumentation
+und Gate-Workflow müssen diesem Parent entsprechen. Die drei Gate-Quelldateien
+dürfen ausschließlich je einen additiven Store-Block enthalten. Nach dessen
+Entfernung müssen ihre Originalhashes stimmen. Dieselbe Prüfung schützt den
+ausschließlich test-only TLS-Zusatz in `runtime.rs`. Der Runtimejob führt die
+vollständige native Gate-Suite sowie die Store-Quellenprüfung am selben
+`SOURCE_SHA` aus. Native Store-Fälle laufen nur im separaten Store-Workflow.
+Der frühere Ausgangsstand ist kein Ersatz für diese Parent-Grenze.
 Vorhandene öffentliche Producer-Fixtures werden von der Original-Manifest-Suite
 mit nativer Kryptografie geprüft. Auch mit diesem Nachweis bleibt ein lokaler
 macOS-Lauf kein Windows-, Installer- oder Produktionsnachweis.

@@ -399,3 +399,13 @@ impl UpdateRuntime {
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;
+// ONGROW_STORE_ADDITIONS_BEGIN
+#[cfg(all(test, ongrow_update_store_probe))]
+impl UpdateRuntime {
+    pub(crate) fn store_probe(policy: RuntimePolicy, certificate: &[u8]) -> Result<Self, RuntimeError> {
+        let certificate = reqwest::Certificate::from_pem(certificate).map_err(|_| RuntimeError::Client)?;
+        let client = client_builder().add_root_certificate(certificate).build().map_err(|_| RuntimeError::Client)?;
+        Ok(Self { policy, scheduler: CheckScheduler::new()?, client, deadline: CHECK_TIMEOUT })
+    }
+}
+// ONGROW_STORE_ADDITIONS_END
