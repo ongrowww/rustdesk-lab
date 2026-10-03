@@ -123,6 +123,47 @@ mod owner_diagnostics {
     pub(super) fn rejected(sid: PSID, user: &User) {
         eprintln!("ONGROW_GATE_OWNER:{}", classify(sid, user));
     }
+    fn access_categories(mask: u32) -> impl Iterator<Item = &'static str> {
+        // Public WinNT.h access bits. The caller passes only the rejected intersection.
+        [(0x0001_0000, "delete"), (0x0000_0040, "delete-child"),
+            (0x0004_0000, "write-dac"), (0x0008_0000, "write-owner"),
+            (0x0000_0100, "write-attributes"), (0x0000_0010, "write-ea"),
+            (0x4000_0000, "generic-write"), (0x1000_0000, "generic-all"),
+            (0x0000_0002, "write-data"), (0x0000_0004, "append-data")]
+            .into_iter().filter_map(move |(bit, category)| if mask & bit != 0 { Some(category) } else { None })
+    }
+    pub(super) fn rejected_access(sid: PSID, user: &User, mask: u32) {
+        eprintln!("ONGROW_GATE_ACCESS_PRINCIPAL:{}", classify(sid, user));
+        for category in access_categories(mask) {
+            eprintln!("ONGROW_GATE_ACCESS_RIGHT:{category}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_access_categories_are_fixed_and_masked() {
+        let public_bits = [(1u32 << 16, "delete"), (1 << 6, "delete-child"),
+            (1 << 18, "write-dac"), (1 << 19, "write-owner"),
+            (1 << 8, "write-attributes"), (1 << 4, "write-ea"),
+            (1 << 30, "generic-write"), (1 << 28, "generic-all"),
+            (1 << 1, "write-data"), (1 << 2, "append-data")];
+        let outside = !0x500d_0156u32;
+        assert!(access_categories(0).next().is_none());
+        assert!(access_categories(outside).next().is_none());
+        for selection in 0..(1u32 << public_bits.len()) {
+            let mut input = 0;
+            let mut expected = Vec::new();
+            for (index, (bit, category)) in public_bits.iter().enumerate() {
+                if selection & (1 << index) != 0 { input |= bit; expected.push(*category); }
+            }
+            assert_eq!(access_categories(input).collect::<Vec<_>>(), expected);
+            assert_eq!(access_categories(input | outside).collect::<Vec<_>>(), expected);
+            for mutation in [0x500d_0150u32, 0x500d_0156u32] {
+                let masked: Vec<_> = public_bits.iter().filter(|(bit, _)| input & mutation & bit != 0)
+                    .map(|(_, category)| *category).collect();
+                assert_eq!(access_categories(input & mutation).collect::<Vec<_>>(), masked);
+            }
+        }
+    }
 
     #[test]
     fn diagnostic_categories_follow_ancestor_only_service_trust() {
@@ -216,7 +257,11 @@ fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor
         // or reconfiguring existing protected children. The protected root and
         // both files reject any foreign write capability.
         let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };
-        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) { return Err(untrusted("forbidden-access")); }
+        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) {
+            #[cfg(all(test, ongrow_session_gate_probe))]
+            owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
+            return Err(untrusted("forbidden-access"));
+        }
     }
     Ok(())
 }

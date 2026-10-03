@@ -375,6 +375,37 @@ class SessionGateTests(unittest.TestCase):
             || (ancestor && trusted_installer().map(|installer| EqualSid(sid, installer.0).is_ok()).unwrap_or(false))
     }''')
 
+    def test_acl_diagnostics_are_fixed_probe_only_and_pure_categories_run(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        diagnostic = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
+        self.assertIn("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", windows)
+        self.assertIn('''if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) {
+            #[cfg(all(test, ongrow_session_gate_probe))]
+            owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
+            return Err(untrusted("forbidden-access"));
+        }''', windows)
+        access = diagnostic.split("    pub(super) fn rejected_access(", 1)[1].split("\n    #[test]", 1)[0]
+        self.assertEqual(access, '''sid: PSID, user: &User, mask: u32) {
+        eprintln!("ONGROW_GATE_ACCESS_PRINCIPAL:{}", classify(sid, user));
+        for category in access_categories(mask) {
+            eprintln!("ONGROW_GATE_ACCESS_RIGHT:{category}");
+        }
+    }
+''')
+        helper = diagnostic[diagnostic.index("    fn access_categories("):diagnostic.index("    pub(super) fn rejected_access(")]
+        pure_test = diagnostic[diagnostic.index("    #[test]\n    fn diagnostic_access_categories_are_fixed_and_masked("):
+                               diagnostic.index("    #[test]\n    fn diagnostic_categories_follow_ancestor_only_service_trust(")]
+        # Compile the exact std-only helper and its native Rust test on either OS.
+        # No Windows API, gate initialization, desktop build or dependency lookup.
+        with tempfile.TemporaryDirectory(prefix="ongrow-acl-categories-") as directory:
+            source = Path(directory) / "categories.rs"
+            binary = Path(directory) / ("categories.exe" if os.name == "nt" else "categories")
+            source.write_text(helper + pure_test)
+            subprocess.run(["rustc", "--edition=2021", "--test", str(source), "-o", str(binary)],
+                           check=True, capture_output=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
+            self.assertIn("1 passed; 0 failed", result.stdout)
+
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):
         platform = "windows" if os.name == "nt" else "macos"

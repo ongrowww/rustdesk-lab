@@ -139,6 +139,22 @@ Pfade, SIDs, ACL-Inhalte und Kontonamen werden nicht ausgegeben. Diese Ausgabe
 existiert ausschließlich bei `cfg(test)` zusammen mit dem Probe-Marker.
 Die Diagnose selbst ändert keine Trust-Regel.
 
+Bei `forbidden-access` nennt ausschließlich die Probe zusätzlich die feste
+Principal-Klasse der abgewiesenen ACE und einzelne feste Rechtekategorien.
+Sie erhält nur `ace.Mask & mutation`, niemals die ungefilterte ACE-Maske.
+An Vorfahren sind die möglichen Kategorien `delete`, `delete-child`,
+`write-dac`, `write-owner`, `write-attributes`, `write-ea`, `generic-write`
+und `generic-all`. Im geschützten Root sowie auf Gate und Journal kommen
+`write-data` und `append-data` hinzu. Die Bedeutung der öffentlichen Bits steht
+in Microsofts [ACCESS_MASK](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-mask)
+und [Dateirechten](https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants).
+Rohmasken, SIDs, ACL-Inhalte, Pfade und Kontonamen werden nicht ausgegeben.
+Ein reiner Rust-Kategorisierungstest prüft alle 1024 Bitkombinationen, die
+Nullmaske, Bits außerhalb der Mutation-Masken und beide Hierarchiestufen.
+Die Python-Suite kompiliert und führt denselben std-only Helper samt Test auch
+ohne Windows-API aus. Die vorhandenen SID-Tests prüfen weiterhin die NULL-SID.
+Ablehnungsbedingung, Mutation-Masken, Trust-Prüfung und Rückgabe bleiben gleich.
+
 Bei abgewiesenem Eigentümer ergänzt ausschließlich die Windows-Probe eine feste
 Klasse `system`, `admins`, `builtin-users`, `everyone`, `creator-owner`,
 `local-service`, `network-service`, `current-user`, `trusted-installer`,
@@ -177,8 +193,14 @@ auf Basis `d6a36a25` kompiliert und besteht den erweiterten SID-Klassentest.
 Die acht Windows-Lock-Fixtures scheitern mit `forbidden-access` und `ancestor`.
 Welcher Principal oder ACE dies verursacht, ist damit nicht belegt. Die neue
 Platzierung unter dem OS-Konsole-Elternpfad ist eine Probe-Hypothese, keine
-weitere Trust-Ausnahme. Der native Windows-Lock-Nachweis mit dieser Platzierung
-bleibt offen.
+weitere Trust-Ausnahme.
+Auch [Lauf 37108565146](https://github.com/ongrowww/rustdesk-lab/actions/runs/37108565146)
+auf Basis `bb931d2a` besteht den SID-Test, scheitert aber wieder in allen acht
+Windows-Lock-Fixtures mit `forbidden-access` und `ancestor`. Die LocalAppData-
+Platzierung hat den Fehler nicht behoben. Die neue ACL-Diagnose soll den
+Principal und die abgewiesene Rechteklasse eingrenzen, ohne Trust zu erweitern
+oder ACLs zu ändern. Dieser neue native Diagnoselauf und der Windows-Lock-
+Nachweis bleiben offen.
 
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte
