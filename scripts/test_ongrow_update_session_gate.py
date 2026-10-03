@@ -363,7 +363,7 @@ class SessionGateTests(unittest.TestCase):
             self.assertIn(f"inspect(&{file}, &user, product, false, false)", windows)
         self.assertIn('if !ancestor && product == Product::SupportConsole && unsafe { EqualSid(owner, user.sid()) }.is_err()', windows)
         self.assertIn('let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };', windows)
-        self.assertIn('if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor)', windows)
+        self.assertIn('if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor)', windows)
         self.assertIn('"root-volume"', windows)
         trusted = windows.split("fn trusted_sid(", 1)[1].split("\n}\n", 1)[0]
         self.assertEqual(trusted, '''sid: PSID, user: &User, product: Product, ancestor: bool) -> bool {
@@ -374,6 +374,161 @@ class SessionGateTests(unittest.TestCase):
             || (product == Product::SupportConsole && EqualSid(sid, user.sid()).is_ok())
             || (ancestor && trusted_installer().map(|installer| EqualSid(sid, installer.0).is_ok()).unwrap_or(false))
     }''')
+
+    def test_acl_diagnostics_are_fixed_probe_only_and_pure_categories_run(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        diagnostic = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
+        self.assertIn("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", windows)
+        self.assertIn('''if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor) {
+            #[cfg(all(test, ongrow_session_gate_probe))]
+            owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
+            return Err(untrusted("forbidden-access"));
+        }''', windows)
+        access = diagnostic.split("    pub(super) fn rejected_access(", 1)[1].split("\n    #[test]", 1)[0]
+        self.assertEqual(access, '''sid: PSID, user: &User, mask: u32) {
+        eprintln!("ONGROW_GATE_ACCESS_PRINCIPAL:{}", classify(sid, user));
+        for category in access_categories(mask) {
+            eprintln!("ONGROW_GATE_ACCESS_RIGHT:{category}");
+        }
+    }
+''')
+        helper = diagnostic[diagnostic.index("    fn access_categories("):diagnostic.index("    pub(super) fn rejected_access(")]
+        pure_test = diagnostic[diagnostic.index("    #[test]\n    fn diagnostic_access_categories_are_fixed_and_masked("):
+                               diagnostic.index("    #[test]\n    fn diagnostic_categories_follow_ancestor_only_service_trust(")]
+        # Compile the exact std-only helper and its native Rust test on either OS.
+        # No Windows API, gate initialization, desktop build or dependency lookup.
+        with tempfile.TemporaryDirectory(prefix="ongrow-acl-categories-") as directory:
+            source = Path(directory) / "categories.rs"
+            binary = Path(directory) / ("categories.exe" if os.name == "nt" else "categories")
+            source.write_text(helper + pure_test)
+            subprocess.run(["rustc", "--edition=2021", "--test", str(source), "-o", str(binary)],
+                           check=True, capture_output=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
+            self.assertIn("1 passed; 0 failed", result.stdout)
+
+    def test_principal_structure_and_positions_are_probe_only_and_run(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        before, diagnostic = windows.split("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", 1)
+        diagnostic, after = diagnostic.split("\nfn inspect(", 1)
+        classes = [("WinAuthenticatedUserSid", "authenticated-users"),
+                   ("WinCreatorOwnerRightsSid", "owner-rights"),
+                   ("WinBuiltinGuestsSid", "builtin-guests"),
+                   ("WinBuiltinPowerUsersSid", "builtin-power-users"),
+                   ("WinBuiltinBackupOperatorsSid", "builtin-backup-operators"),
+                   ("WinBuiltinRemoteDesktopUsersSid", "builtin-remote-desktop-users"),
+                   ("WinBuiltinRemoteManagementUsersSid", "builtin-remote-management-users")]
+        for sdk, category in classes:
+            self.assertEqual(diagnostic.count(f'({sdk}, "{category}")'), 2)
+        for symbol in [sdk for sdk, _ in classes if sdk != "WinCreatorOwnerRightsSid"] + ["GetSidIdentifierAuthority", "GetSidSubAuthorityCount",
+                                                   "GetSidSubAuthority", "windows_account_form", "account_form_values"]:
+            self.assertNotIn(symbol, before + after)
+        classifier = diagnostic.split("    fn classify(", 1)[1].split("    pub(super) fn rejected(", 1)[0]
+        self.assertIn("IsWellKnownSid(sid, kind)", classifier)
+        self.assertLess(classifier.index("EqualSid(sid, user.sid())"), classifier.index("windows_account_form(sid)"))
+        self.assertLess(classifier.index("EqualSid(sid, services.0)"), classifier.index("windows_account_form(sid)"))
+        self.assertLess(classifier.index("EqualSid(sid, installer.0)"), classifier.index("windows_account_form(sid)"))
+        wrapper = diagnostic[diagnostic.index("    fn windows_account_form("):diagnostic.index("    fn classify(")]
+        self.assertEqual(wrapper, '''    fn windows_account_form(sid: PSID) -> bool {
+        // Structural category only. Never inspect domain values or the account RID.
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let authority = unsafe { GetSidIdentifierAuthority(sid) };
+        if authority.is_null() { return false; }
+        let authority = unsafe { (*authority).Value };
+        if authority != [0, 0, 0, 0, 0, 5] { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let count = unsafe { GetSidSubAuthorityCount(sid) };
+        if count.is_null() { return false; }
+        let count = unsafe { *count };
+        if count != 5 { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let first = unsafe { GetSidSubAuthority(sid, 0) };
+        if first.is_null() { return false; }
+        account_form_values(authority, count, unsafe { *first })
+    }
+''')
+        self.assertIn('ConvertStringSidToSidW(value, &mut sid.0)', diagnostic)
+        self.assertIn('assert!(!windows_account_form(PSID::default()))', diagnostic)
+        self.assertIn('(w!("S-1-5-21-1-2-3-4"), true)', diagnostic)
+        for value in ["S-1-6-21-1-2-3-4", "S-1-5-21-1-2-3", "S-1-5-21-1-2-3-4-5", "S-1-5-20-1-2-3-4", "S-1-0-0"]:
+            self.assertIn(f'(w!("{value}"), false)', diagnostic)
+        context = after.split('eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", ', 1)[1].split(");", 1)[0]
+        self.assertEqual(context, 'if index == 1 { "root-volume" } else if index + 1 == components.len() { "protected-root" } '
+                                 'else if index + 2 == components.len() { "direct-parent" } else { "outer-ancestor" }')
+        self.assertIn('#[cfg(all(test, ongrow_session_gate_probe))]\n            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}"', after)
+        helper = diagnostic[diagnostic.index("    fn account_form_values("):diagnostic.index("    fn windows_account_form(")]
+        pure_test = diagnostic[diagnostic.index("    #[test]\n    fn diagnostic_account_form_values_are_exact("):
+                               diagnostic.index("    #[test]\n    fn diagnostic_account_form_uses_only_public_structure(")]
+        context_test = '''
+fn context(index: usize, components: &[()]) -> &'static str { ''' + context + ''' }
+#[test]
+fn positions_are_fixed_categories() {
+    for count in 2..=10 {
+        let components = vec![(); count];
+        assert_eq!(context(1, &components), "root-volume");
+        if count > 2 { assert_eq!(context(count - 1, &components), "protected-root"); }
+        if count > 3 { assert_eq!(context(count - 2, &components), "direct-parent"); }
+        for index in 2..count.saturating_sub(2) {
+            assert_eq!(context(index, &components), "outer-ancestor");
+        }
+    }
+}
+'''
+        # Execute the original std-only helper/test and original context expression.
+        # The Windows SID API wrapper remains covered by the native SDK tests.
+        with tempfile.TemporaryDirectory(prefix="ongrow-principal-categories-") as directory:
+            source = Path(directory) / "categories.rs"
+            binary = Path(directory) / ("categories.exe" if os.name == "nt" else "categories")
+            source.write_text(helper + pure_test + context_test)
+            subprocess.run(["rustc", "--edition=2021", "--test", str(source), "-o", str(binary)],
+                           check=True, capture_output=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
+            self.assertIn("2 passed; 0 failed", result.stdout)
+
+    def test_owner_rights_allow_ace_uses_the_same_descriptor_owner(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        helper = windows.split("fn trusted_ace_sid(", 1)[1].split("\n// Read-only diagnostics.", 1)[0]
+        self.assertEqual(helper, '''sid: PSID, owner: PSID, user: &User, product: Product, ancestor: bool) -> bool {
+    if sid.0.is_null() || owner.0.is_null() { return false; }
+    if !unsafe { IsValidSid(sid) }.as_bool() || !unsafe { IsValidSid(owner) }.as_bool() { return false; }
+    if trusted_sid(sid, user, product, ancestor) { return true; }
+    // Owner Rights is object-bound, not a globally trusted principal. The owner
+    // comes from the same security descriptor as this ACE, never from a token group.
+    unsafe {
+        IsWellKnownSid(sid, WinCreatorOwnerRightsSid).as_bool()
+            && trusted_sid(owner, user, product, ancestor)
+            && (ancestor || product != Product::SupportConsole || EqualSid(owner, user.sid()).is_ok())
+    }
+}
+''')
+        inspect = windows.split("fn inspect(", 1)[1].split("\nfn open(", 1)[0]
+        self.assertIn('''GetSecurityInfo(handle(file), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            Some(&mut owner), None, Some(&mut dacl), None, Some(&mut descriptor.0))''', inspect)
+        owner_check = inspect.index("if !trusted_sid(owner, user, product, ancestor)")
+        exact_check = inspect.index("if !ancestor && product == Product::SupportConsole")
+        acl_loop = inspect.index("for index in 0..size.AceCount")
+        ace_check = inspect.index("if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor)")
+        self.assertLess(owner_check, exact_check)
+        self.assertLess(exact_check, acl_loop)
+        self.assertLess(acl_loop, ace_check)
+        self.assertEqual(inspect.count("trusted_ace_sid("), 1)
+        self.assertEqual(inspect.count("GetSecurityInfo("), 1)
+        self.assertIn('return Err(untrusted("forbidden-access"));', inspect[ace_check:])
+        native = windows.split("mod owner_diagnostics {", 1)[1].split("\nfn inspect(", 1)[0]
+        self.assertIn("fn owner_rights_ace_is_bound_to_the_same_trusted_owner", native)
+        self.assertIn("CreateWellKnownSid(kind, None, Some(sid), &mut length)", native)
+        self.assertIn('ConvertStringSidToSidW(w!("S-1-3-5"), &mut near_rights.0)', native)
+        self.assertIn("assert!(!trusted_sid(rights, &user, product, ancestor))", native)
+        self.assertIn("let mut invalid_buffer = [0usize; 16]", native)
+        self.assertIn("assert!(!unsafe { IsValidSid(invalid) }.as_bool())", native)
+        for sid, owner in [("invalid", "system"), ("rights", "invalid"), ("system", "invalid")]:
+            self.assertIn(f"assert!(!trusted_ace_sid({sid}, {owner}, &user, product, ancestor))", native)
+        self.assertIn("trusted_ace_sid(rights, installer.0, &user, product, ancestor), ancestor", native)
+        self.assertIn("for owner in [foreign.0, world, services.0, rights, creator, null_sid, PSID::default()]", native)
+        self.assertIn("for sid in [foreign.0, world, services.0, creator, near_rights.0, null_sid, PSID::default()]", native)
+        self.assertIn("assert!(![rights, foreign.0].into_iter()", native)
+        self.assertIn(".all(|sid| trusted_ace_sid(sid, owner, &user, product, ancestor))", native)
+        self.assertIn('''assert_eq!(trusted_ace_sid(sid, system, &user, product, ancestor),
+                        trusted_sid(sid, &user, product, ancestor));''', native)
 
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):

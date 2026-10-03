@@ -15,7 +15,7 @@ use windows::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
             DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION,
             PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
-            WinBuiltinAdministratorsSid, WinLocalSystemSid,
+            WinBuiltinAdministratorsSid, WinLocalSystemSid, WinCreatorOwnerRightsSid,
         },
         Storage::FileSystem::{
             GetDriveTypeW, GetFileInformationByHandle, LockFileEx, UnlockFileEx,
@@ -87,6 +87,18 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, ancestor: bool) -> bool
             || (ancestor && trusted_installer().map(|installer| EqualSid(sid, installer.0).is_ok()).unwrap_or(false))
     }
 }
+fn trusted_ace_sid(sid: PSID, owner: PSID, user: &User, product: Product, ancestor: bool) -> bool {
+    if sid.0.is_null() || owner.0.is_null() { return false; }
+    if !unsafe { IsValidSid(sid) }.as_bool() || !unsafe { IsValidSid(owner) }.as_bool() { return false; }
+    if trusted_sid(sid, user, product, ancestor) { return true; }
+    // Owner Rights is object-bound, not a globally trusted principal. The owner
+    // comes from the same security descriptor as this ACE, never from a token group.
+    unsafe {
+        IsWellKnownSid(sid, WinCreatorOwnerRightsSid).as_bool()
+            && trusted_sid(owner, user, product, ancestor)
+            && (ancestor || product != Product::SupportConsole || EqualSid(owner, user.sid()).is_ok())
+    }
+}
 
 // Read-only diagnostics. Nothing in this module is available to product code.
 #[cfg(all(test, ongrow_session_gate_probe))]
@@ -94,6 +106,9 @@ mod owner_diagnostics {
     use super::*;
     use windows::Win32::Security::{
         WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
+        WinAuthenticatedUserSid, WinBuiltinGuestsSid, WinBuiltinPowerUsersSid,
+        WinBuiltinBackupOperatorsSid, WinBuiltinRemoteDesktopUsersSid, WinBuiltinRemoteManagementUsersSid,
+        GetSidIdentifierAuthority, GetSidSubAuthorityCount, GetSidSubAuthority,
     };
 
     fn all_services() -> Option<AllocatedSid> {
@@ -103,12 +118,37 @@ mod owner_diagnostics {
         if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
         Some(value)
     }
+    fn account_form_values(authority: [u8; 6], count: u8, first: u32) -> bool {
+        authority == [0, 0, 0, 0, 0, 5] && count == 5 && first == 21
+    }
+    fn windows_account_form(sid: PSID) -> bool {
+        // Structural category only. Never inspect domain values or the account RID.
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let authority = unsafe { GetSidIdentifierAuthority(sid) };
+        if authority.is_null() { return false; }
+        let authority = unsafe { (*authority).Value };
+        if authority != [0, 0, 0, 0, 0, 5] { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let count = unsafe { GetSidSubAuthorityCount(sid) };
+        if count.is_null() { return false; }
+        let count = unsafe { *count };
+        if count != 5 { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let first = unsafe { GetSidSubAuthority(sid, 0) };
+        if first.is_null() { return false; }
+        account_form_values(authority, count, unsafe { *first })
+    }
     fn classify(sid: PSID, user: &User) -> &'static str {
         if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return "other"; }
         if unsafe { IsWellKnownSid(sid, WinLocalSystemSid) }.as_bool() { return "system"; }
         if unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) }.as_bool() { return "admins"; }
         for (kind, category) in [(WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"),
-            (WinCreatorOwnerSid, "creator-owner"), (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service")] {
+            (WinCreatorOwnerSid, "creator-owner"), (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"),
+            (WinAuthenticatedUserSid, "authenticated-users"), (WinCreatorOwnerRightsSid, "owner-rights"),
+            (WinBuiltinGuestsSid, "builtin-guests"), (WinBuiltinPowerUsersSid, "builtin-power-users"),
+            (WinBuiltinBackupOperatorsSid, "builtin-backup-operators"),
+            (WinBuiltinRemoteDesktopUsersSid, "builtin-remote-desktop-users"),
+            (WinBuiltinRemoteManagementUsersSid, "builtin-remote-management-users")] {
             if unsafe { IsWellKnownSid(sid, kind) }.as_bool() { return category; }
         }
         if unsafe { EqualSid(sid, user.sid()) }.is_ok() { return "current-user"; }
@@ -118,10 +158,52 @@ mod owner_diagnostics {
         if let Some(installer) = trusted_installer() {
             if unsafe { EqualSid(sid, installer.0) }.is_ok() { return "trusted-installer"; }
         }
+        if windows_account_form(sid) { return "windows-account-form"; }
         "other"
     }
     pub(super) fn rejected(sid: PSID, user: &User) {
         eprintln!("ONGROW_GATE_OWNER:{}", classify(sid, user));
+    }
+    fn access_categories(mask: u32) -> impl Iterator<Item = &'static str> {
+        // Public WinNT.h access bits. The caller passes only the rejected intersection.
+        [(0x0001_0000, "delete"), (0x0000_0040, "delete-child"),
+            (0x0004_0000, "write-dac"), (0x0008_0000, "write-owner"),
+            (0x0000_0100, "write-attributes"), (0x0000_0010, "write-ea"),
+            (0x4000_0000, "generic-write"), (0x1000_0000, "generic-all"),
+            (0x0000_0002, "write-data"), (0x0000_0004, "append-data")]
+            .into_iter().filter_map(move |(bit, category)| if mask & bit != 0 { Some(category) } else { None })
+    }
+    pub(super) fn rejected_access(sid: PSID, user: &User, mask: u32) {
+        eprintln!("ONGROW_GATE_ACCESS_PRINCIPAL:{}", classify(sid, user));
+        for category in access_categories(mask) {
+            eprintln!("ONGROW_GATE_ACCESS_RIGHT:{category}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_access_categories_are_fixed_and_masked() {
+        let public_bits = [(1u32 << 16, "delete"), (1 << 6, "delete-child"),
+            (1 << 18, "write-dac"), (1 << 19, "write-owner"),
+            (1 << 8, "write-attributes"), (1 << 4, "write-ea"),
+            (1 << 30, "generic-write"), (1 << 28, "generic-all"),
+            (1 << 1, "write-data"), (1 << 2, "append-data")];
+        let outside = !0x500d_0156u32;
+        assert!(access_categories(0).next().is_none());
+        assert!(access_categories(outside).next().is_none());
+        for selection in 0..(1u32 << public_bits.len()) {
+            let mut input = 0;
+            let mut expected = Vec::new();
+            for (index, (bit, category)) in public_bits.iter().enumerate() {
+                if selection & (1 << index) != 0 { input |= bit; expected.push(*category); }
+            }
+            assert_eq!(access_categories(input).collect::<Vec<_>>(), expected);
+            assert_eq!(access_categories(input | outside).collect::<Vec<_>>(), expected);
+            for mutation in [0x500d_0150u32, 0x500d_0156u32] {
+                let masked: Vec<_> = public_bits.iter().filter(|(bit, _)| input & mutation & bit != 0)
+                    .map(|(_, category)| *category).collect();
+                assert_eq!(access_categories(input & mutation).collect::<Vec<_>>(), masked);
+            }
+        }
     }
 
     #[test]
@@ -148,7 +230,12 @@ mod owner_diagnostics {
         }
         let public_classes = [(WinLocalSystemSid, "system"), (WinBuiltinAdministratorsSid, "admins"),
             (WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"), (WinCreatorOwnerSid, "creator-owner"),
-            (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"), (WinNullSid, "other")];
+            (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"),
+            (WinAuthenticatedUserSid, "authenticated-users"), (WinCreatorOwnerRightsSid, "owner-rights"),
+            (WinBuiltinGuestsSid, "builtin-guests"), (WinBuiltinPowerUsersSid, "builtin-power-users"),
+            (WinBuiltinBackupOperatorsSid, "builtin-backup-operators"),
+            (WinBuiltinRemoteDesktopUsersSid, "builtin-remote-desktop-users"),
+            (WinBuiltinRemoteManagementUsersSid, "builtin-remote-management-users"), (WinNullSid, "other")];
         for (kind, category) in public_classes {
             let mut buffer = [0usize; 16];
             let sid = PSID(buffer.as_mut_ptr().cast());
@@ -161,7 +248,7 @@ mod owner_diagnostics {
                 }
             }
         }
-        let expected_user = public_classes.iter().take(7)
+        let expected_user = public_classes.iter().take(public_classes.len() - 1)
             .find(|(kind, _)| unsafe { IsWellKnownSid(user.sid(), *kind) }.as_bool())
             .map(|(_, category)| *category).unwrap_or("current-user");
         assert_eq!(classify(user.sid(), &user), expected_user);
@@ -172,6 +259,107 @@ mod owner_diagnostics {
             for ancestor in [false, true] {
                 assert_eq!(trusted_sid(user.sid(), &user, product, ancestor), privileged_user || product == Product::SupportConsole);
                 assert!(!trusted_sid(PSID::default(), &user, product, ancestor));
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_account_form_values_are_exact() {
+        let nt = [0, 0, 0, 0, 0, 5];
+        assert!(account_form_values(nt, 5, 21));
+        for count in 0..=u8::MAX {
+            assert_eq!(account_form_values(nt, count, 21), count == 5);
+        }
+        for index in 0..nt.len() {
+            let mut different = nt;
+            different[index] ^= 1;
+            assert!(!account_form_values(different, 5, 21));
+        }
+        for first in [0, 20, 22, u32::MAX] {
+            assert!(!account_form_values(nt, 5, first));
+        }
+    }
+
+    #[test]
+    fn diagnostic_account_form_uses_only_public_structure() {
+        let user = User::current().unwrap();
+        assert!(!windows_account_form(PSID::default()));
+        // Entirely synthetic SIDs. No real account/domain identifiers are used.
+        for (value, expected) in [(w!("S-1-5-21-1-2-3-4"), true),
+            (w!("S-1-6-21-1-2-3-4"), false), (w!("S-1-5-21-1-2-3"), false),
+            (w!("S-1-5-21-1-2-3-4-5"), false), (w!("S-1-5-20-1-2-3-4"), false),
+            (w!("S-1-0-0"), false)] {
+            let mut sid = AllocatedSid(PSID::default());
+            unsafe { ConvertStringSidToSidW(value, &mut sid.0) }.unwrap();
+            assert!(unsafe { IsValidSid(sid.0) }.as_bool());
+            assert_eq!(windows_account_form(sid.0), expected);
+            assert_eq!(classify(sid.0, &user), if expected { "windows-account-form" } else { "other" });
+            for product in [Product::CustomerDesk, Product::SupportConsole] {
+                for ancestor in [false, true] { assert!(!trusted_sid(sid.0, &user, product, ancestor)); }
+            }
+        }
+    }
+
+    #[test]
+    fn owner_rights_ace_is_bound_to_the_same_trusted_owner() {
+        use windows::Win32::Security::{CreateWellKnownSid, WinNullSid};
+        let user = User::current().unwrap();
+        let mut public = [WinCreatorOwnerRightsSid, WinLocalSystemSid, WinBuiltinAdministratorsSid,
+            WinWorldSid, WinCreatorOwnerSid, WinNullSid].map(|kind| {
+            let mut buffer = vec![0usize; 16];
+            let sid = PSID(buffer.as_mut_ptr().cast());
+            let mut length = std::mem::size_of_val(buffer.as_slice()) as u32;
+            unsafe { CreateWellKnownSid(kind, None, Some(sid), &mut length) }.unwrap();
+            buffer
+        });
+        let [rights, system, admins, world, creator, null_sid] = public.each_mut()
+            .map(|buffer| PSID(buffer.as_mut_ptr().cast()));
+        let installer = trusted_installer().unwrap();
+        let services = all_services().unwrap();
+        let mut foreign = AllocatedSid(PSID::default());
+        let mut near_rights = AllocatedSid(PSID::default());
+        unsafe { ConvertStringSidToSidW(w!("S-1-5-21-1-2-3-4"), &mut foreign.0) }.unwrap();
+        unsafe { ConvertStringSidToSidW(w!("S-1-3-5"), &mut near_rights.0) }.unwrap();
+        assert!(unsafe { IsValidSid(foreign.0) }.as_bool());
+        assert!(unsafe { IsValidSid(near_rights.0) }.as_bool());
+        // Fully allocated and aligned, but invalid revision 0. Never a dangling pointer.
+        let mut invalid_buffer = [0usize; 16];
+        let invalid = PSID(invalid_buffer.as_mut_ptr().cast());
+        assert!(!unsafe { IsValidSid(invalid) }.as_bool());
+        let privileged_user = unsafe { IsWellKnownSid(user.sid(), WinLocalSystemSid).as_bool()
+            || IsWellKnownSid(user.sid(), WinBuiltinAdministratorsSid).as_bool() };
+        for product in [Product::CustomerDesk, Product::SupportConsole] {
+            for ancestor in [false, true] {
+                // Owner Rights remains invalid as a standalone object owner.
+                assert!(!trusted_sid(rights, &user, product, ancestor));
+                assert!(!trusted_ace_sid(invalid, system, &user, product, ancestor));
+                assert!(!trusted_ace_sid(rights, invalid, &user, product, ancestor));
+                assert!(!trusted_ace_sid(system, invalid, &user, product, ancestor));
+                for owner in [system, admins] {
+                    let expected = product == Product::CustomerDesk || ancestor
+                        || unsafe { EqualSid(owner, user.sid()) }.is_ok();
+                    assert_eq!(trusted_ace_sid(rights, owner, &user, product, ancestor), expected);
+                }
+                assert_eq!(trusted_ace_sid(rights, installer.0, &user, product, ancestor), ancestor);
+                assert_eq!(trusted_ace_sid(rights, user.sid(), &user, product, ancestor),
+                    privileged_user || product == Product::SupportConsole);
+                let owner = if product == Product::SupportConsole { user.sid() } else { system };
+                assert!(trusted_ace_sid(rights, owner, &user, product, ancestor));
+                // A valid Owner Rights ACE never bypasses a separate foreign Allow ACE.
+                assert!(![rights, foreign.0].into_iter()
+                    .all(|sid| trusted_ace_sid(sid, owner, &user, product, ancestor)));
+                for owner in [foreign.0, world, services.0, rights, creator, null_sid, PSID::default()] {
+                    assert!(!trusted_ace_sid(rights, owner, &user, product, ancestor));
+                }
+                for sid in [foreign.0, world, services.0, creator, near_rights.0, null_sid, PSID::default()] {
+                    assert!(!trusted_ace_sid(sid, system, &user, product, ancestor));
+                }
+                // Every ordinary ACE keeps the original global SID decision.
+                for sid in [system, admins, user.sid(), installer.0, foreign.0, world, services.0,
+                    creator, near_rights.0, null_sid, PSID::default()] {
+                    assert_eq!(trusted_ace_sid(sid, system, &user, product, ancestor),
+                        trusted_sid(sid, &user, product, ancestor));
+                }
             }
         }
     }
@@ -216,7 +404,11 @@ fn inspect(file: &File, user: &User, product: Product, directory: bool, ancestor
         // or reconfiguring existing protected children. The protected root and
         // both files reject any foreign write capability.
         let mutation = if ancestor { 0x000d_0150u32 | 0x5000_0000 } else { 0x000d_0156u32 | 0x5000_0000 };
-        if ace.Mask & mutation != 0 && !trusted_sid(sid, user, product, ancestor) { return Err(untrusted("forbidden-access")); }
+        if ace.Mask & mutation != 0 && !trusted_ace_sid(sid, owner, user, product, ancestor) {
+            #[cfg(all(test, ongrow_session_gate_probe))]
+            owner_diagnostics::rejected_access(sid, user, ace.Mask & mutation);
+            return Err(untrusted("forbidden-access"));
+        }
     }
     Ok(())
 }
@@ -248,7 +440,7 @@ fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Er
         let file = open(&current, false, true, false)?;
         inspect(&file, user, product, true, index + 1 < components.len()).map_err(|error| {
             #[cfg(all(test, ongrow_session_gate_probe))]
-            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index == 1 { "root-volume" } else if index + 1 < components.len() { "ancestor" } else { "protected-root" });
+            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index == 1 { "root-volume" } else if index + 1 == components.len() { "protected-root" } else if index + 2 == components.len() { "direct-parent" } else { "outer-ancestor" });
             error
         })?;
         held.push(file);
