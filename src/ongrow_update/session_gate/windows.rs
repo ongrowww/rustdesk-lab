@@ -94,6 +94,9 @@ mod owner_diagnostics {
     use super::*;
     use windows::Win32::Security::{
         WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
+        WinAuthenticatedUserSid, WinCreatorOwnerRightsSid, WinBuiltinGuestsSid, WinBuiltinPowerUsersSid,
+        WinBuiltinBackupOperatorsSid, WinBuiltinRemoteDesktopUsersSid, WinBuiltinRemoteManagementUsersSid,
+        GetSidIdentifierAuthority, GetSidSubAuthorityCount, GetSidSubAuthority,
     };
 
     fn all_services() -> Option<AllocatedSid> {
@@ -103,12 +106,37 @@ mod owner_diagnostics {
         if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
         Some(value)
     }
+    fn account_form_values(authority: [u8; 6], count: u8, first: u32) -> bool {
+        authority == [0, 0, 0, 0, 0, 5] && count == 5 && first == 21
+    }
+    fn windows_account_form(sid: PSID) -> bool {
+        // Structural category only. Never inspect domain values or the account RID.
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let authority = unsafe { GetSidIdentifierAuthority(sid) };
+        if authority.is_null() { return false; }
+        let authority = unsafe { (*authority).Value };
+        if authority != [0, 0, 0, 0, 0, 5] { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let count = unsafe { GetSidSubAuthorityCount(sid) };
+        if count.is_null() { return false; }
+        let count = unsafe { *count };
+        if count != 5 { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let first = unsafe { GetSidSubAuthority(sid, 0) };
+        if first.is_null() { return false; }
+        account_form_values(authority, count, unsafe { *first })
+    }
     fn classify(sid: PSID, user: &User) -> &'static str {
         if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return "other"; }
         if unsafe { IsWellKnownSid(sid, WinLocalSystemSid) }.as_bool() { return "system"; }
         if unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) }.as_bool() { return "admins"; }
         for (kind, category) in [(WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"),
-            (WinCreatorOwnerSid, "creator-owner"), (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service")] {
+            (WinCreatorOwnerSid, "creator-owner"), (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"),
+            (WinAuthenticatedUserSid, "authenticated-users"), (WinCreatorOwnerRightsSid, "owner-rights"),
+            (WinBuiltinGuestsSid, "builtin-guests"), (WinBuiltinPowerUsersSid, "builtin-power-users"),
+            (WinBuiltinBackupOperatorsSid, "builtin-backup-operators"),
+            (WinBuiltinRemoteDesktopUsersSid, "builtin-remote-desktop-users"),
+            (WinBuiltinRemoteManagementUsersSid, "builtin-remote-management-users")] {
             if unsafe { IsWellKnownSid(sid, kind) }.as_bool() { return category; }
         }
         if unsafe { EqualSid(sid, user.sid()) }.is_ok() { return "current-user"; }
@@ -118,6 +146,7 @@ mod owner_diagnostics {
         if let Some(installer) = trusted_installer() {
             if unsafe { EqualSid(sid, installer.0) }.is_ok() { return "trusted-installer"; }
         }
+        if windows_account_form(sid) { return "windows-account-form"; }
         "other"
     }
     pub(super) fn rejected(sid: PSID, user: &User) {
@@ -189,7 +218,12 @@ mod owner_diagnostics {
         }
         let public_classes = [(WinLocalSystemSid, "system"), (WinBuiltinAdministratorsSid, "admins"),
             (WinBuiltinUsersSid, "builtin-users"), (WinWorldSid, "everyone"), (WinCreatorOwnerSid, "creator-owner"),
-            (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"), (WinNullSid, "other")];
+            (WinLocalServiceSid, "local-service"), (WinNetworkServiceSid, "network-service"),
+            (WinAuthenticatedUserSid, "authenticated-users"), (WinCreatorOwnerRightsSid, "owner-rights"),
+            (WinBuiltinGuestsSid, "builtin-guests"), (WinBuiltinPowerUsersSid, "builtin-power-users"),
+            (WinBuiltinBackupOperatorsSid, "builtin-backup-operators"),
+            (WinBuiltinRemoteDesktopUsersSid, "builtin-remote-desktop-users"),
+            (WinBuiltinRemoteManagementUsersSid, "builtin-remote-management-users"), (WinNullSid, "other")];
         for (kind, category) in public_classes {
             let mut buffer = [0usize; 16];
             let sid = PSID(buffer.as_mut_ptr().cast());
@@ -202,7 +236,7 @@ mod owner_diagnostics {
                 }
             }
         }
-        let expected_user = public_classes.iter().take(7)
+        let expected_user = public_classes.iter().take(public_classes.len() - 1)
             .find(|(kind, _)| unsafe { IsWellKnownSid(user.sid(), *kind) }.as_bool())
             .map(|(_, category)| *category).unwrap_or("current-user");
         assert_eq!(classify(user.sid(), &user), expected_user);
@@ -213,6 +247,43 @@ mod owner_diagnostics {
             for ancestor in [false, true] {
                 assert_eq!(trusted_sid(user.sid(), &user, product, ancestor), privileged_user || product == Product::SupportConsole);
                 assert!(!trusted_sid(PSID::default(), &user, product, ancestor));
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_account_form_values_are_exact() {
+        let nt = [0, 0, 0, 0, 0, 5];
+        assert!(account_form_values(nt, 5, 21));
+        for count in 0..=u8::MAX {
+            assert_eq!(account_form_values(nt, count, 21), count == 5);
+        }
+        for index in 0..nt.len() {
+            let mut different = nt;
+            different[index] ^= 1;
+            assert!(!account_form_values(different, 5, 21));
+        }
+        for first in [0, 20, 22, u32::MAX] {
+            assert!(!account_form_values(nt, 5, first));
+        }
+    }
+
+    #[test]
+    fn diagnostic_account_form_uses_only_public_structure() {
+        let user = User::current().unwrap();
+        assert!(!windows_account_form(PSID::default()));
+        // Entirely synthetic SIDs. No real account/domain identifiers are used.
+        for (value, expected) in [(w!("S-1-5-21-1-2-3-4"), true),
+            (w!("S-1-6-21-1-2-3-4"), false), (w!("S-1-5-21-1-2-3"), false),
+            (w!("S-1-5-21-1-2-3-4-5"), false), (w!("S-1-5-20-1-2-3-4"), false),
+            (w!("S-1-0-0"), false)] {
+            let mut sid = AllocatedSid(PSID::default());
+            unsafe { ConvertStringSidToSidW(value, &mut sid.0) }.unwrap();
+            assert!(unsafe { IsValidSid(sid.0) }.as_bool());
+            assert_eq!(windows_account_form(sid.0), expected);
+            assert_eq!(classify(sid.0, &user), if expected { "windows-account-form" } else { "other" });
+            for product in [Product::CustomerDesk, Product::SupportConsole] {
+                for ancestor in [false, true] { assert!(!trusted_sid(sid.0, &user, product, ancestor)); }
             }
         }
     }
@@ -293,7 +364,7 @@ fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Er
         let file = open(&current, false, true, false)?;
         inspect(&file, user, product, true, index + 1 < components.len()).map_err(|error| {
             #[cfg(all(test, ongrow_session_gate_probe))]
-            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index == 1 { "root-volume" } else if index + 1 < components.len() { "ancestor" } else { "protected-root" });
+            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", if index == 1 { "root-volume" } else if index + 1 == components.len() { "protected-root" } else if index + 2 == components.len() { "direct-parent" } else { "outer-ancestor" });
             error
         })?;
         held.push(file);

@@ -406,6 +406,84 @@ class SessionGateTests(unittest.TestCase):
             result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
             self.assertIn("1 passed; 0 failed", result.stdout)
 
+    def test_principal_structure_and_positions_are_probe_only_and_run(self):
+        windows = (ROOT / "src/ongrow_update/session_gate/windows.rs").read_text()
+        before, diagnostic = windows.split("#[cfg(all(test, ongrow_session_gate_probe))]\nmod owner_diagnostics {", 1)
+        diagnostic, after = diagnostic.split("\nfn inspect(", 1)
+        classes = [("WinAuthenticatedUserSid", "authenticated-users"),
+                   ("WinCreatorOwnerRightsSid", "owner-rights"),
+                   ("WinBuiltinGuestsSid", "builtin-guests"),
+                   ("WinBuiltinPowerUsersSid", "builtin-power-users"),
+                   ("WinBuiltinBackupOperatorsSid", "builtin-backup-operators"),
+                   ("WinBuiltinRemoteDesktopUsersSid", "builtin-remote-desktop-users"),
+                   ("WinBuiltinRemoteManagementUsersSid", "builtin-remote-management-users")]
+        for sdk, category in classes:
+            self.assertEqual(diagnostic.count(f'({sdk}, "{category}")'), 2)
+        for symbol in [sdk for sdk, _ in classes] + ["GetSidIdentifierAuthority", "GetSidSubAuthorityCount",
+                                                   "GetSidSubAuthority", "windows_account_form", "account_form_values"]:
+            self.assertNotIn(symbol, before + after)
+        classifier = diagnostic.split("    fn classify(", 1)[1].split("    pub(super) fn rejected(", 1)[0]
+        self.assertIn("IsWellKnownSid(sid, kind)", classifier)
+        self.assertLess(classifier.index("EqualSid(sid, user.sid())"), classifier.index("windows_account_form(sid)"))
+        self.assertLess(classifier.index("EqualSid(sid, services.0)"), classifier.index("windows_account_form(sid)"))
+        self.assertLess(classifier.index("EqualSid(sid, installer.0)"), classifier.index("windows_account_form(sid)"))
+        wrapper = diagnostic[diagnostic.index("    fn windows_account_form("):diagnostic.index("    fn classify(")]
+        self.assertEqual(wrapper, '''    fn windows_account_form(sid: PSID) -> bool {
+        // Structural category only. Never inspect domain values or the account RID.
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let authority = unsafe { GetSidIdentifierAuthority(sid) };
+        if authority.is_null() { return false; }
+        let authority = unsafe { (*authority).Value };
+        if authority != [0, 0, 0, 0, 0, 5] { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let count = unsafe { GetSidSubAuthorityCount(sid) };
+        if count.is_null() { return false; }
+        let count = unsafe { *count };
+        if count != 5 { return false; }
+        if sid.0.is_null() || !unsafe { IsValidSid(sid) }.as_bool() { return false; }
+        let first = unsafe { GetSidSubAuthority(sid, 0) };
+        if first.is_null() { return false; }
+        account_form_values(authority, count, unsafe { *first })
+    }
+''')
+        self.assertIn('ConvertStringSidToSidW(value, &mut sid.0)', diagnostic)
+        self.assertIn('assert!(!windows_account_form(PSID::default()))', diagnostic)
+        self.assertIn('(w!("S-1-5-21-1-2-3-4"), true)', diagnostic)
+        for value in ["S-1-6-21-1-2-3-4", "S-1-5-21-1-2-3", "S-1-5-21-1-2-3-4-5", "S-1-5-20-1-2-3-4", "S-1-0-0"]:
+            self.assertIn(f'(w!("{value}"), false)', diagnostic)
+        context = after.split('eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}", ', 1)[1].split(");", 1)[0]
+        self.assertEqual(context, 'if index == 1 { "root-volume" } else if index + 1 == components.len() { "protected-root" } '
+                                 'else if index + 2 == components.len() { "direct-parent" } else { "outer-ancestor" }')
+        self.assertIn('#[cfg(all(test, ongrow_session_gate_probe))]\n            eprintln!("ONGROW_GATE_REJECT_CONTEXT:{}"', after)
+        helper = diagnostic[diagnostic.index("    fn account_form_values("):diagnostic.index("    fn windows_account_form(")]
+        pure_test = diagnostic[diagnostic.index("    #[test]\n    fn diagnostic_account_form_values_are_exact("):
+                               diagnostic.index("    #[test]\n    fn diagnostic_account_form_uses_only_public_structure(")]
+        context_test = '''
+fn context(index: usize, components: &[()]) -> &'static str { ''' + context + ''' }
+#[test]
+fn positions_are_fixed_categories() {
+    for count in 2..=10 {
+        let components = vec![(); count];
+        assert_eq!(context(1, &components), "root-volume");
+        if count > 2 { assert_eq!(context(count - 1, &components), "protected-root"); }
+        if count > 3 { assert_eq!(context(count - 2, &components), "direct-parent"); }
+        for index in 2..count.saturating_sub(2) {
+            assert_eq!(context(index, &components), "outer-ancestor");
+        }
+    }
+}
+'''
+        # Execute the original std-only helper/test and original context expression.
+        # The Windows SID API wrapper remains covered by the native SDK tests.
+        with tempfile.TemporaryDirectory(prefix="ongrow-principal-categories-") as directory:
+            source = Path(directory) / "categories.rs"
+            binary = Path(directory) / ("categories.exe" if os.name == "nt" else "categories")
+            source.write_text(helper + pure_test + context_test)
+            subprocess.run(["rustc", "--edition=2021", "--test", str(source), "-o", str(binary)],
+                           check=True, capture_output=True, text=True, timeout=180)
+            result = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=180)
+            self.assertIn("2 passed; 0 failed", result.stdout)
+
     @unittest.skipUnless(sys.platform in ["darwin", "win32"], "native gate requires macOS or Windows")
     def test_real_native_gate(self):
         platform = "windows" if os.name == "nt" else "macos"

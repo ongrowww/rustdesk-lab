@@ -158,8 +158,18 @@ Ablehnungsbedingung, Mutation-Masken, Trust-Prüfung und Rückgabe bleiben gleic
 Bei abgewiesenem Eigentümer ergänzt ausschließlich die Windows-Probe eine feste
 Klasse `system`, `admins`, `builtin-users`, `everyone`, `creator-owner`,
 `local-service`, `network-service`, `current-user`, `trusted-installer`,
-`all-services` oder `other`. Die Hierarchie nennt zusätzlich `root-volume`, niemals einen
-Pfad oder dessen konkrete Komponenten. Die Klassifikation verwendet exakte
+`all-services`, `authenticated-users`, `owner-rights`, `builtin-guests`,
+`builtin-power-users`, `builtin-backup-operators`, `builtin-remote-desktop-users`,
+`builtin-remote-management-users`, `windows-account-form` oder `other`.
+Dieselben Klassen gelten für die abgewiesene ACE. Dateieigentümer und ACE-SID
+sind getrennte Prüfungen. `owner-rights` ist nicht `creator-owner`.
+Die sieben zusätzlichen öffentlichen Klassen verwenden ausschließlich
+[SDK-Typen](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-well_known_sid_type)
+und [IsWellKnownSid](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-iswellknownsid).
+Die Hierarchie nennt nur `root-volume`, `protected-root`, `direct-parent` oder
+`outer-ancestor`. Die letzten beiden Kategorien folgen ausschließlich der
+Position im bereits geprüften Komponentenvektor, ohne Namen oder numerische Tiefe.
+Die Klassifikation verwendet exakte
 SID-Vergleiche, keine Präfixfreigabe für Service-SIDs. Eine Klassifikation ist
 keine Trust-Erteilung. Der native Windows-Test verlangt für beide Produkte,
 dass TrustedInstaller ausschließlich an Vorfahren akzeptiert und im geschützten
@@ -167,6 +177,20 @@ Root sowie auf Gate und Journal abgewiesen wird. All Services bleibt auf beiden
 Hierarchiestufen abgewiesen. Eine synthetische Service-SID, die nur in
 der letzten Subautorität von TrustedInstaller abweicht, muss `other` bleiben
 und ebenfalls in allen vier Kombinationen abgewiesen werden.
+
+Erst nach den vorhandenen exakten Klassen- und Benutzervergleichen prüft die
+Probe die strukturelle Kategorie `windows-account-form`. Sie verlangt eine
+gültige, nicht leere SID, NT-Autorität und exakt fünf Subautoritäten. Die einzige
+gelesene Subautorität ist der öffentliche erste Wert 21. Vor jedem SDK-Zugriff
+prüft sie NULL und `IsValidSid`, vor Index 0 zusätzlich die exakte Anzahl.
+Das SDK [validiert den Subautoritätsindex nicht selbst](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-getsidsubauthority).
+Domainanteile und Konto-RID liest, speichert oder protokolliert die Probe nicht.
+Die Form unterscheidet weder lokale SAM- von AD-Konten noch Benutzer von Gruppen.
+Alle sieben neuen Klassen und eine vollständig synthetische Kontoform bleiben
+für beide Produkte an Vorfahren und geschützten Objekten untrusted. SDK-Tests
+konstruieren diese SIDs tatsächlich und prüfen ähnliche Formen, NULL und Null-SID.
+Die Python-Suite führt den originalen std-only Strukturhelper samt Grenztests
+und die originale Positionsausdruckslogik auch ohne Windows-API aus.
 
 Produktion und Probe teilen dieselbe Konstruktion der exakten öffentlichen
 TrustedInstaller-SID
@@ -199,8 +223,16 @@ auf Basis `bb931d2a` besteht den SID-Test, scheitert aber wieder in allen acht
 Windows-Lock-Fixtures mit `forbidden-access` und `ancestor`. Die LocalAppData-
 Platzierung hat den Fehler nicht behoben. Die neue ACL-Diagnose soll den
 Principal und die abgewiesene Rechteklasse eingrenzen, ohne Trust zu erweitern
-oder ACLs zu ändern. Dieser neue native Diagnoselauf und der Windows-Lock-
-Nachweis bleiben offen.
+oder ACLs zu ändern.
+[Lauf 37109618924](https://github.com/ongrowww/rustdesk-lab/actions/runs/37109618924)
+auf Basis `1181c958` besteht unter Windows die SDK-SID- und Bitklassentests.
+Alle acht Lock-Fixtures scheitern weiterhin an einem Vorfahren. Die abgewiesene
+ACE hat Klasse `other` und die maskierten Rechte `delete`, `delete-child`,
+`write-dac`, `write-owner`, `write-attributes` und `write-ea`. Die separate
+Owner-Prüfung hat zuvor bestanden. Die Ausgabe ist kein Effective-Access-Ergebnis
+und begründet keine Trust-Erweiterung. Der macOS-Job besteht.
+Die erweiterten Kategorien sollen den unbekannten Principal eingrenzen.
+Ihr nativer Windows-Nachweis und der Windows-Lock-Nachweis bleiben offen.
 
 Die lokalen macOS-Regressionsfälle prüfen unter anderem Mehrprozess-Locks,
 natürlichen Drop und harten Prozessabbruch, dauerhaftes Pending, letzte
