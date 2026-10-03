@@ -4,6 +4,53 @@ use hbb_common::sodiumoxide::{self, crypto::sign};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+fn deadline_request_prefix_is_valid(requests: &[String]) -> bool {
+    match requests {
+        [] => true, // The overall deadline also covers TLS before HTTP starts.
+        [manifest] => manifest == "/releases/manifest.json",
+        [manifest, signature] => {
+            manifest == "/releases/manifest.json" && signature == "/releases/manifest.sig"
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn deadline_request_prefix_contract() {
+    let valid: &[&[&str]] = &[
+        &[],
+        &["/releases/manifest.json"],
+        &["/releases/manifest.json", "/releases/manifest.sig"],
+    ];
+    let invalid: &[&[&str]] = &[
+        &["/releases/9/synthetic.msi"],
+        &["/foreign"],
+        &["/releases/manifest.sig"],
+        &["/releases/manifest.sig", "/releases/manifest.json"],
+        &["/releases/manifest.json", "/releases/manifest.json"],
+        &["/releases/manifest.json", "/foreign"],
+        &["/releases/manifest.json", "/releases/9/synthetic.msi"],
+        &[
+            "/releases/manifest.json",
+            "/releases/manifest.sig",
+            "/releases/9/synthetic.msi",
+        ],
+        &[
+            "/releases/manifest.json",
+            "/releases/manifest.sig",
+            "/releases/manifest.sig",
+        ],
+    ];
+    for values in valid {
+        let requests: Vec<String> = values.iter().map(|value| (*value).to_owned()).collect();
+        assert!(deadline_request_prefix_is_valid(&requests));
+    }
+    for values in invalid {
+        let requests: Vec<String> = values.iter().map(|value| (*value).to_owned()).collect();
+        assert!(!deadline_request_prefix_is_valid(&requests));
+    }
+}
+
 #[test]
 fn streaming_size_hash_and_overflow_boundaries() {
     fn verifier(size: u64, bytes: &[u8]) -> StreamingPayloadVerifier {
@@ -501,9 +548,8 @@ mod native {
         ));
         let deadline_requests = f.requests();
         assert!(
-            deadline_requests == ["/releases/manifest.json"]
-                || deadline_requests == ["/releases/manifest.json", "/releases/manifest.sig"],
-            "deadline must stop at a nonempty metadata-only request prefix"
+            deadline_request_prefix_is_valid(&deadline_requests),
+            "deadline must stop at an exact metadata-only request prefix, possibly before HTTP"
         );
         assert!(sink.is_empty());
         // Wait for the bounded server handler to finish before changing routes.

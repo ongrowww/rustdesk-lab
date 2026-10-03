@@ -15,10 +15,17 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_update_runtime_probe"
 PUBLIC_FIXTURES = frozenset(("public.key", "manifest.json", "manifest.sig", "payload.bin"))
+
+
+def read_app_sources(paths):
+    for path in paths:
+        if "ongrow_update" not in path.parts:
+            yield path, path.read_text(encoding="utf-8", errors="strict")
 
 
 def validate_public_fixtures(environment):
@@ -63,7 +70,8 @@ def openssl_tool():
                   r"C:\Program Files\Git\usr\bin\openssl.exe"]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
-            result = subprocess.run([candidate, "version"], capture_output=True, text=True, timeout=10)
+            result = subprocess.run([candidate, "version"], capture_output=True, text=True,
+                                    encoding="utf-8", errors="strict", timeout=10)
             if result.returncode == 0 and result.stdout.startswith("OpenSSL 3."):
                 return str(Path(candidate).resolve())
     raise RuntimeError("Existing OpenSSL 3 missing; no installation allowed")
@@ -93,10 +101,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             with self.server.guard:
                 requests_path = self.server.root / "requests.json"
-                requests = json.loads(requests_path.read_text())
+                requests = json.loads(requests_path.read_text(encoding="utf-8", errors="strict"))
                 requests.append(self.path)
-                requests_path.write_text(json.dumps(requests))
-                routes = json.loads((self.server.root / "routes.json").read_text())
+                requests_path.write_text(json.dumps(requests), encoding="utf-8", errors="strict")
+                routes = json.loads((self.server.root / "routes.json").read_text(encoding="utf-8", errors="strict"))
             route = routes.get(self.path, {"status": 404, "body": []})
             if self.headers.get("Accept-Encoding") != "identity":
                 raise AssertionError("Original transport must request identity encoding")
@@ -138,7 +146,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 class RuntimeTests(unittest.TestCase):
     def test_workflow_public_producer_and_native_matrix_contract(self):
-        workflow = (ROOT / ".github/workflows/ongrow-update-runtime-lab.yml").read_text()
+        workflow = (ROOT / ".github/workflows/ongrow-update-runtime-lab.yml").read_text(encoding="utf-8", errors="strict")
         producer, native = workflow.split("  public-producer:\n", 1)[1].split("  native-runtime:\n", 1)
         trusted = "if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
         self.assertIn(trusted, producer)
@@ -212,7 +220,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(validate_public_fixtures({}))
 
     def test_boundaries_and_inactive_apps(self):
-        source = (ROOT / "src/ongrow_update/runtime.rs").read_text()
+        source = (ROOT / "src/ongrow_update/runtime.rs").read_text(encoding="utf-8", errors="strict")
         compact = re.sub(r"\s+", "", source)
         for forbidden in ["std::env", "Client::new", "danger_accept", "response.bytes(", "block_on", "tokio::spawn", "process::Command"]:
             self.assertNotIn(re.sub(r"\s+", "", forbidden), compact)
@@ -222,17 +230,45 @@ class RuntimeTests(unittest.TestCase):
         self.assertLess(compact.index("LastAcceptedSequence::Unknown)"), compact.index("self.scheduler.acquire(manual)"))
         self.assertLess(compact.index("manifest.size>MAX_PAYLOAD_BYTES"), compact.index("self.response(&manifest.download_url"))
         self.assertLess(compact.index("verifier.update(&chunk)?"), compact.index("sink.write_all(&chunk)"))
-        for app_source in (ROOT / "src").rglob("*.rs"):
-            if "ongrow_update" not in app_source.parts:
-                self.assertNotIn("UpdateRuntime", app_source.read_text(), str(app_source.relative_to(ROOT)))
+        for app_source, text in read_app_sources((ROOT / "src").rglob("*.rs")):
+            self.assertNotIn("UpdateRuntime", text, str(app_source.relative_to(ROOT)))
         self.assertFalse(any(path.suffix in [".pem", ".key", ".crt", ".exe"] for path in FIXTURE.rglob("*")))
+
+    def test_real_source_scan_uses_strict_utf8_with_cp1252_undefined_byte(self):
+        text = "// UTF-8 portability probe: \u0401\nstruct Probe;\n"
+        encoded = text.encode("utf-8", errors="strict")
+        self.assertIn(0x81, encoded)
+        with self.assertRaises(UnicodeDecodeError):
+            encoded.decode("cp1252", errors="strict")
+        real_read_text = Path.read_text
+        checked_paths = []
+
+        def guarded_read(path, *args, **kwargs):
+            self.assertEqual(kwargs.get("encoding"), "utf-8")
+            self.assertEqual(kwargs.get("errors"), "strict")
+            checked_paths.append(path)
+            return real_read_text(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix="ongrow-utf8-source-") as directory:
+            fixture = Path(directory) / "utf8-probe.rs"
+            fixture.write_text(text, encoding="utf-8", errors="strict")
+            with mock.patch.object(Path, "read_text", new=guarded_read):
+                # Run the actual unchanged boundary checks over repository sources.
+                self.test_boundaries_and_inactive_apps()
+                self.assertEqual(list(read_app_sources([fixture])), [(fixture, text)])
+                fixture.write_bytes(b"\xff")
+                with self.assertRaises(UnicodeDecodeError):
+                    list(read_app_sources([fixture]))
+            self.assertIn(fixture, checked_paths)
+            self.assertTrue(any(path.is_relative_to(ROOT / "src") for path in checked_paths))
 
     def test_native_original_sources_real_tls(self):
         if sys.platform not in ("darwin", "win32"):
             self.fail("Native macOS or Windows required; no silent skip")
         environment = tool_environment()
         validate_public_fixtures(environment)
-        version = subprocess.run(["rustc", "--version"], env=environment, capture_output=True, text=True, timeout=10)
+        version = subprocess.run(["rustc", "--version"], env=environment, capture_output=True,
+                                 text=True, encoding="utf-8", errors="strict", timeout=10)
         self.assertEqual(version.returncode, 0)
         self.assertTrue(version.stdout.startswith("rustc 1.81.0 "), "Exact existing Rust 1.81.0 required")
         target = ROOT / "target/ongrow-update-runtime-probe"
@@ -253,12 +289,13 @@ class RuntimeTests(unittest.TestCase):
                  "-extfile", str(tls_root / "leaf-ext.cnf"), "-out", str(tls_root / "server.pem")],
             ]
             (tls_root / "leaf-ext.cnf").write_text("basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost\n"
-                                                 "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
+                                                 "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n",
+                                                 encoding="utf-8", errors="strict")
             for arguments in commands:
                 result = subprocess.run([openssl] + arguments, capture_output=True, timeout=20)
                 self.assertEqual(result.returncode, 0, "Ephemeral TLS certificate generation failed")
-            (tls_root / "routes.json").write_text("{}")
-            (tls_root / "requests.json").write_text("[]")
+            (tls_root / "routes.json").write_text("{}", encoding="utf-8", errors="strict")
+            (tls_root / "requests.json").write_text("[]", encoding="utf-8", errors="strict")
             server = TlsServer(tls_root)
             thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1})
             thread.start()
@@ -270,27 +307,29 @@ class RuntimeTests(unittest.TestCase):
                 environment["NO_PROXY"] = "localhost,127.0.0.1"
                 environment["no_proxy"] = environment["NO_PROXY"]
                 environment["CARGO_TARGET_DIR"] = str(target / "build")
-                manifest = (FIXTURE / "Cargo.toml").read_text()
+                manifest = (FIXTURE / "Cargo.toml").read_text(encoding="utf-8", errors="strict")
                 manifest += "\n[lib]\npath = " + json.dumps(str(FIXTURE / "lib.rs")) + "\n"
-                (scratch / "Cargo.toml").write_text(manifest)
+                (scratch / "Cargo.toml").write_text(manifest, encoding="utf-8", errors="strict")
                 shutil.copyfile(ROOT / "Cargo.lock", scratch / "Cargo.lock")
                 command = ["cargo", "test", "--lib", "--manifest-path", str(scratch / "Cargo.toml")]
                 if environment.get("GITHUB_ACTIONS") != "true":
                     command.append("--offline")
-                listing = subprocess.run(command + ["--", "--list"], env=environment, capture_output=True, text=True, timeout=300)
+                listing = subprocess.run(command + ["--", "--list"], env=environment, capture_output=True,
+                                         text=True, encoding="utf-8", errors="strict", timeout=300)
                 self.assertEqual(listing.returncode, 0, listing.stderr)
                 # Discovery is evidence, not a successful empty test command.
-                expected = re.findall(r"#\[test\]\s*fn (\w+)", (ROOT / "src/ongrow_update/tests.rs").read_text())
+                expected = re.findall(r"#\[test\]\s*fn (\w+)",
+                                      (ROOT / "src/ongrow_update/tests.rs").read_text(encoding="utf-8", errors="strict"))
                 self.assertGreaterEqual(len(expected), 13)
                 for name in expected:
                     self.assertIn(f"ongrow_update::tests::{name}: test", listing.stdout)
                 native = "ongrow_update::runtime::tests::native::original_transport_real_tls_success_and_rejections"
                 self.assertIn(native + ": test", listing.stdout)
                 for name in ["streaming_size_hash_and_overflow_boundaries", "scheduler_initial_success_retry_parallel_drop_backward_and_ranges",
-                             "trusted_policy_rejects_plain_http_bad_keys_and_ambiguous_locations"]:
+                             "trusted_policy_rejects_plain_http_bad_keys_and_ambiguous_locations", "deadline_request_prefix_contract"]:
                     self.assertIn(f"ongrow_update::runtime::tests::{name}: test", listing.stdout)
                 result = subprocess.run(command + ["--", "--test-threads=1", "--nocapture"], env=environment,
-                                        capture_output=True, text=True, timeout=300)
+                                        capture_output=True, text=True, encoding="utf-8", errors="strict", timeout=300)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("NATIVE_TLS_ORIGINAL_TRANSPORT_PASS", result.stdout)
                 self.assertNotIn("ignored", result.stdout.split("test result:", 1)[0])
@@ -298,7 +337,7 @@ class RuntimeTests(unittest.TestCase):
                 missing = environment.copy()
                 missing.pop("ONGROW_RUNTIME_PROBE_ROOT", None)
                 result = subprocess.run(command + ["--", "--exact", native], env=missing,
-                                        capture_output=True, text=True, timeout=30)
+                                        capture_output=True, text=True, encoding="utf-8", errors="strict", timeout=30)
                 self.assertNotEqual(result.returncode, 0, "Missing probe input must fail")
                 self.assertIn("native TLS probe root", result.stdout + result.stderr)
                 if "ONGROW_RELEASE_TEST_FIXTURE_DIR" not in environment:

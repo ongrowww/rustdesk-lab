@@ -81,6 +81,12 @@ Die Python-Prüfung importiert die Original-Rust-Module über ein isoliertes
 Cargo-Workspace unter `target`. Root-Cargo-Dateien bleiben unverändert. Auf lokalen
 Macs verwendet sie den vorhandenen Rust 1.81.0 und `--offline`. Fehlende Tools oder
 Cache-Einträge führen zu einem Fehler, nicht zu Installation oder grünem Skip.
+Alle Textdateien und textuellen Subprozess-Ausgaben im eigenen Python-Harness
+werden explizit mit UTF-8 und strikter Fehlerbehandlung gelesen oder geschrieben.
+Die Windows-Locale entscheidet nicht über das Dekodieren. Ein Kontrolltext mit
+einem unter CP1252 undefinierten Byte prüft denselben Sourcescan; ungültiges UTF-8
+muss weiterhin scheitern. Es gibt keinen globalen UTF-8-Schalter und kein Ignorieren
+oder Ersetzen von Dekodierungsfehlern.
 Der Loopback-Server nutzt echte TLS-Requests und einen kurzlebigen CA-Schlüssel
 sowie einen separat signierten Server-Leaf mit `CA:FALSE`, SAN und `serverAuth`
 außerhalb Git. Die zusätzliche Test-CA existiert ausschließlich in
@@ -108,9 +114,11 @@ Ed25519-Schlüssel und führt die POSIX-Producer-CLI nicht aus. TLS-CA und Serve
 entstehen weiterhin jeweils lokal im nativen Test außerhalb Git und Artefakten.
 
 Der Deadline-Test behält 120 ms Serververzögerung je Antwort und 200 ms Gesamtfrist.
-Je nach TLS-/Runner-Timing darf der beobachtete Request-Präfix nur das Manifest
-oder Manifest plus Signatur enthalten. Null Requests, Payload oder fremde Ziele
-sind unzulässig; das Ergebnis muss `Deadline` sein und der Sink leer bleiben.
+Die Gesamtfrist umfasst auch TLS vor HTTP. Die exakten zulässigen Request-Präfixe
+sind deshalb leer, nur Manifest oder Manifest plus Signatur. Payload, fremde Ziele,
+Duplikate und vertauschte Reihenfolge sind unzulässig. Ein test-only Prädikat mit
+eigenem Unit-Test prüft diesen Vertrag. Das Ergebnis muss weiterhin `Deadline` sein
+und der Sink leer bleiben. Weder Frist, Retries noch TLS-Regeln ändern sich.
 
 Der kleine CI-Workflow prüft `macos-14` und `windows-2022` mit exakt Rust 1.81.0,
 gepinnten Actions und einem geprüften `SOURCE_SHA`. Er akzeptiert nur interne
