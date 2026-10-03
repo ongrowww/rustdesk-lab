@@ -1,8 +1,9 @@
-//! Offline verification only. No network, persistence, download or apply.
+//! Signed verification and bounded transport. No app caller, persistence or apply.
 #![allow(dead_code)] // Not connected to an updater until trusted bootstrap exists.
 
 pub mod manifest;
 pub mod session_gate;
+pub(crate) mod runtime;
 
 use hbb_common::sodiumoxide::{self, crypto::sign};
 use manifest::{Channel, Manifest, Platform, Product};
@@ -227,13 +228,48 @@ impl VerifiedCandidate {
         &self.manifest
     }
 
-    /// Hashes the complete Setup.exe bytes. No cached size-only acceptance.
+    pub fn payload_verifier(&self) -> StreamingPayloadVerifier {
+        StreamingPayloadVerifier {
+            expected_size: self.manifest.size,
+            expected_hash: self.manifest.sha256.clone(),
+            received: 0,
+            hash: Sha256::new(),
+        }
+    }
+
+    /// Uses the same verifier as the streaming transport.
     pub fn verify_payload(&self, payload: &[u8]) -> Result<(), Error> {
-        if payload.len() as u64 != self.manifest.size {
+        let mut verifier = self.payload_verifier();
+        verifier.update(payload)?;
+        verifier.finalize()
+    }
+}
+
+/// Size is checked before hashing, and before the caller writes a chunk.
+pub struct StreamingPayloadVerifier {
+    expected_size: u64,
+    expected_hash: String,
+    received: u64,
+    hash: Sha256,
+}
+
+impl StreamingPayloadVerifier {
+    pub fn update(&mut self, chunk: &[u8]) -> Result<(), Error> {
+        let length = u64::try_from(chunk.len()).map_err(|_| Error::PayloadSize)?;
+        let total = self.received.checked_add(length).ok_or(Error::PayloadSize)?;
+        if total > self.expected_size {
             return Err(Error::PayloadSize);
         }
-        let hash = format!("{:x}", Sha256::digest(payload));
-        if hash != self.manifest.sha256 {
+        self.hash.update(chunk);
+        self.received = total;
+        Ok(())
+    }
+
+    pub fn finalize(self) -> Result<(), Error> {
+        if self.received != self.expected_size {
+            return Err(Error::PayloadSize);
+        }
+        if format!("{:x}", self.hash.finalize()) != self.expected_hash {
             return Err(Error::PayloadHash);
         }
         Ok(())

@@ -1,0 +1,64 @@
+name: OnGROW update runtime native TLS probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ongrow-update-runtime-lab.yml'
+      - 'src/ongrow_update/**'
+      - 'scripts/test_ongrow_update_runtime.py'
+      - 'scripts/fixtures/ongrow_update_runtime_probe/**'
+      - 'scripts/ongrow_release_signing.py'
+      - 'scripts/test_ongrow_release_signing.py'
+      - 'docs/ongrow-update-runtime.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ongrow-update-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-runtime:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checked out revision
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install isolated probe toolchain on disposable runner
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: '1.81.0'
+
+      - name: Run native TLS and source boundaries with public producer fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl_tool="$(python -c 'import sys; sys.path.insert(0, "scripts"); from test_ongrow_update_runtime import openssl_tool; print(openssl_tool())')"
+          fixture_home="$(python -c 'from pathlib import Path; print(Path.home().resolve())')"
+          fixture_dir="$fixture_home/ongrow-runtime-public-${{ github.run_id }}-${{ github.run_attempt }}"
+          python scripts/test_ongrow_release_signing.py --openssl "$openssl_tool" --export-fixtures-dir "$fixture_dir"
+          export ONGROW_RELEASE_TEST_FIXTURE_DIR="$fixture_dir"
+          python scripts/test_ongrow_update_runtime.py
+          python scripts/test_ongrow_product_profile.py
+          python scripts/test_ongrow_ci_isolation.py
+          git diff --exit-code af58da41f7d21552e3712def936496d83a0c5b4c -- Cargo.toml Cargo.lock src/ongrow_update/session_gate.rs src/ongrow_update/session_gate
+          git diff --check
