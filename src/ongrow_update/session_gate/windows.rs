@@ -79,47 +79,22 @@ fn trusted_sid(sid: PSID, user: &User, product: Product, _ancestor: bool) -> boo
 #[cfg(all(test, ongrow_session_gate_probe))]
 mod owner_diagnostics {
     use super::*;
-    use windows::{core::{w, BOOL, PWSTR}, Win32::Security::{
-        Authorization::ConvertStringSidToSidW, IsValidSid, SID_NAME_USE,
+    use windows::{core::w, Win32::Security::{
+        Authorization::ConvertStringSidToSidW, IsValidSid,
         WinBuiltinUsersSid, WinWorldSid, WinCreatorOwnerSid, WinLocalServiceSid, WinNetworkServiceSid,
     }};
 
-    // Microsoft WinBase.h declares this local-only API since Windows 7. It is
-    // not exposed by our existing windows crate metadata. No remote parameter,
-    // LookupAccountNameW fallback, new dependency or account-name output.
-    #[link(name = "advapi32")]
-    extern "system" {
-        fn LookupAccountNameLocalW(account: PCWSTR, sid: PSID, sid_size: *mut u32,
-            domain: PWSTR, domain_size: *mut u32, kind: *mut SID_NAME_USE) -> BOOL;
-    }
-
-    struct LocalSid(Vec<usize>);
-    impl LocalSid {
-        fn sid(&self) -> PSID { PSID(self.0.as_ptr().cast_mut().cast()) }
-    }
-    fn trusted_installer() -> Option<LocalSid> {
-        let mut sid_size = 0;
-        let mut domain_size = 0;
-        let mut kind = SID_NAME_USE::default();
-        unsafe { LookupAccountNameLocalW(w!("NT SERVICE\\TrustedInstaller"), PSID::default(),
-            &mut sid_size, PWSTR::null(), &mut domain_size, &mut kind); }
-        if sid_size == 0 || sid_size > 68 || domain_size == 0 || domain_size > 256 { return None; }
-        let sid = LocalSid(vec![0usize; (sid_size as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()]);
-        let capacity = sid.0.len() * std::mem::size_of::<usize>();
-        // Do not assume whether a successful API reports a count including the
-        // terminator. Bound the count and require an actually written NUL.
-        let mut domain = vec![0xffffu16; domain_size as usize];
-        if !unsafe { LookupAccountNameLocalW(w!("NT SERVICE\\TrustedInstaller"), sid.sid(),
-            &mut sid_size, PWSTR(domain.as_mut_ptr()), &mut domain_size, &mut kind) }.as_bool()
-            || sid_size == 0 || sid_size as usize > capacity || domain_size as usize > domain.len()
-            || !domain.contains(&0) || !unsafe { IsValidSid(sid.sid()) }.as_bool()
-        { return None; }
-        // Both buffers stay in this test process. Neither is formatted or logged.
-        Some(sid)
-    }
     struct AllocatedSid(PSID);
     impl Drop for AllocatedSid {
         fn drop(&mut self) { unsafe { let _ = LocalFree(Some(HLOCAL(self.0.0))); } }
+    }
+    fn trusted_installer() -> Option<AllocatedSid> {
+        let mut value = AllocatedSid(PSID::default());
+        // Exact public TrustedInstaller SID from Microsoft's WindowsAppSDK
+        // ApplicationData specification, Machine Path/Folder. Classification only.
+        unsafe { ConvertStringSidToSidW(w!("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"), &mut value.0) }.ok()?;
+        if !unsafe { IsValidSid(value.0) }.as_bool() { return None; }
+        Some(value)
     }
     fn all_services() -> Option<AllocatedSid> {
         let mut value = AllocatedSid(PSID::default());
@@ -140,14 +115,10 @@ mod owner_diagnostics {
         if let Some(services) = all_services() {
             if unsafe { EqualSid(sid, services.0) }.is_ok() { return "all-services"; }
         }
-        match trusted_installer() {
-            Some(installer) if unsafe { EqualSid(sid, installer.sid()) }.is_ok() => "trusted-installer",
-            Some(_) => "other",
-            None => {
-                eprintln!("ONGROW_GATE_OWNER_LOOKUP:lookup-unavailable");
-                "other"
-            }
+        if let Some(installer) = trusted_installer() {
+            if unsafe { EqualSid(sid, installer.0) }.is_ok() { return "trusted-installer"; }
         }
+        "other"
     }
     pub(super) fn rejected(sid: PSID, user: &User) {
         eprintln!("ONGROW_GATE_OWNER:{}", classify(sid, user));
@@ -157,9 +128,13 @@ mod owner_diagnostics {
     fn diagnostic_categories_never_grant_service_trust() {
         use windows::Win32::Security::{CreateWellKnownSid, WinNullSid};
         let user = User::current().unwrap();
-        let installer = trusted_installer().expect("fixed local service lookup unavailable");
+        let installer = trusted_installer().unwrap();
         let services = all_services().unwrap();
-        for (sid, category) in [(installer.sid(), "trusted-installer"), (services.0, "all-services")] {
+        // Synthetic service SID differs only in the last subauthority. No prefix trust.
+        let mut other_service = AllocatedSid(PSID::default());
+        unsafe { ConvertStringSidToSidW(w!("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478465"), &mut other_service.0) }.unwrap();
+        assert!(unsafe { IsValidSid(other_service.0) }.as_bool());
+        for (sid, category) in [(installer.0, "trusted-installer"), (services.0, "all-services"), (other_service.0, "other")] {
             assert_eq!(classify(sid, &user), category);
             for product in [Product::CustomerDesk, Product::SupportConsole] {
                 for ancestor in [false, true] { assert!(!trusted_sid(sid, &user, product, ancestor)); }

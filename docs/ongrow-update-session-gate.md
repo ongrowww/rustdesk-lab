@@ -127,16 +127,20 @@ Pfad oder dessen konkrete Komponenten. Die Klassifikation verwendet exakte
 SID-Vergleiche, keine Präfixfreigabe für Service-SIDs. Eine Klassifikation ist
 keine Trust-Erteilung. Der native Windows-Test verlangt ausdrücklich, dass
 TrustedInstaller und All Services weiterhin für beide Produkte und beide
-Hierarchiestufen abgewiesen werden.
+Hierarchiestufen abgewiesen werden. Eine synthetische Service-SID, die nur in
+der letzten Subautorität von TrustedInstaller abweicht, muss `other` bleiben
+und ebenfalls in allen vier Kombinationen abgewiesen werden.
 
-Nur für die feste lokale TrustedInstaller-Identität verwendet die Probe den
-Windows-7-SDK-Import `LookupAccountNameLocalW`. SID- und Domainpuffer sind
-begrenzt, SID-Speicher ist nativ ausgerichtet und wird mit `IsValidSid` geprüft.
-Es gibt keinen Remoteparameter oder Netzwerk-Fallback. Der zurückgegebene
-Domainname bleibt opak im Prozessspeicher. Ein Fehler meldet ausschließlich
-`lookup-unavailable` und liefert keinen zusätzlichen Trust.
-Die API-Deklaration stammt aus
-[Microsoft WinBase.h](https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/WinBase.h).
+Die Probe konstruiert die exakte öffentliche TrustedInstaller-SID
+`S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464` und die
+All-Services-SID `S-1-5-80-0` mit dem bereits verfügbaren
+`ConvertStringSidToSidW`. Sie prüft beide mit `IsValidSid` und gibt den
+zugewiesenen Speicher über `AllocatedSid` und `LocalFree` frei. Es gibt keine
+Konto- oder Domainabfrage und keinen Netzwerk-Fallback. Eine fehlgeschlagene
+Konstruktion liefert `other`, niemals zusätzlichen Trust.
+Microsoft veröffentlicht die TrustedInstaller-SID im Abschnitt Machine
+Path/Folder der
+[WindowsAppSDK-ApplicationData-Spezifikation](https://github.com/microsoft/WindowsAppSDK/blob/main/specs/applicationdata/ApplicationData.md#341-machine-pathfolder).
 Die öffentlichen SID-Kategorien sind in
 [Microsoft Security identifiers](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-identifiers)
 beschrieben. Daraus lässt sich der tatsächliche abgewiesene Runner-Eigentümer
