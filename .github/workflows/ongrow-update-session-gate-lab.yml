@@ -1,0 +1,62 @@
+name: OnGROW update session gate native probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ongrow-update-session-gate-lab.yml'
+      - 'src/ongrow_update/**'
+      - 'src/server.rs'
+      - 'src/server/connection.rs'
+      - 'src/client.rs'
+      - 'src/client/io_loop.rs'
+      - 'src/port_forward.rs'
+      - 'src/ui_session_interface.rs'
+      - 'scripts/test_ongrow_update_session_gate.py'
+      - 'scripts/fixtures/ongrow_session_gate_probe/**'
+      - 'docs/ongrow-update-session-gate.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ongrow-session-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-gate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Verify checked out revision
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install isolated probe toolchain on disposable runner
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: '1.81.0'
+
+      - name: Run native lock and boundary regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/test_ongrow_update_session_gate.py
+          python scripts/test_ongrow_product_profile.py
+          python scripts/test_ongrow_ci_isolation.py
+          git diff --exit-code -- Cargo.toml Cargo.lock
+          git diff --check

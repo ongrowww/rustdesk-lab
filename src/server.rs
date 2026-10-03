@@ -200,6 +200,7 @@ pub async fn create_tcp_connection(
     secure: bool,
     meta: ConnectionMeta,
 ) -> ResultType<()> {
+    let session_lease = crate::ongrow_update::session_gate::admit()?;
     let mut stream = stream;
     let id = server.write().unwrap().get_new_id();
     let (sk, pk) = Config::get_key_pair();
@@ -266,7 +267,7 @@ pub async fn create_tcp_connection(
         }
         log::info!("wake up macos");
     }
-    Connection::start(addr, stream, id, Arc::downgrade(&server), meta).await;
+    Connection::start(addr, stream, id, Arc::downgrade(&server), meta, session_lease).await;
     Ok(())
 }
 

@@ -398,22 +398,161 @@ class ReleaseSigningTests(unittest.TestCase):
 
     def test_workflow_transports_exactly_public_fixtures_and_sets_native_gate(self):
         workflow = (ROOT / ".github/workflows/ongrow-support-console-windows-x64.yml").read_text()
-        upload = workflow.split("- name: Upload bridge artifact", 1)[1].split("\n  build-windows-x64:", 1)[0]
+        upload = workflow.split("- name: Upload public synthetic release fixtures", 1)[1].split("\n      - name:", 1)[0]
+        paths = upload.split("          path: |\n", 1)[1].strip().splitlines()
+        self.assertEqual([p.strip() for p in paths], ["${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}/" + name for name in PUBLIC_FIXTURES])
         for name in PUBLIC_FIXTURES:
-            self.assertIn(f"./target/ongrow-release-test-fixtures/{name}", upload)
+            self.assertIn(f"${{{{ env.ONGROW_PUBLIC_FIXTURE_DIR }}}}/{name}", upload)
         self.assertNotIn(".pem", upload)
-        self.assertNotIn("ongrow-release-test-fixtures/\n", upload)
-        self.assertIn("test_ongrow_release_signing.py", workflow)
-        self.assertIn("--export-fixtures-dir", workflow)
+        bridge = workflow.split("- name: Upload bridge artifact", 1)[1].split("\n  build-windows-x64:", 1)[0]
+        self.assertNotIn("FIXTURE", bridge)
+        self.assertNotIn("public.key", bridge)
+        export = workflow.split("- name: Test isolated lab release signing", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("Path.home().resolve()", export)
+        self.assertIn('fixture_dir="$fixture_home/ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}"', export)
+        self.assertIn('--export-fixtures-dir "$fixture_dir"', export)
+        self.assertNotIn("GITHUB_WORKSPACE", export)
+        self.assertNotIn("target/", export)
+        restore = workflow.split("- name: Restore public synthetic release fixtures", 1)[1].split("\n      - name:", 1)[0]
+        for artifact in (upload, restore):
+            self.assertIn("name: ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}", artifact)
+        self.assertIn("path: ${{ env.ONGROW_PUBLIC_FIXTURE_DIR }}", restore)
+        windows_job = workflow.split("\n  build-windows-x64:", 1)[1]
+        self.assertNotIn("runner.", windows_job.split("    steps:", 1)[0])
+        prepare = workflow.split("- name: Require absent public fixture destination", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn('Join-Path $env:RUNNER_TEMP "ongrow-release-public-${{ github.run_id }}-${{ github.run_attempt }}"', prepare)
+        self.assertIn('"ONGROW_PUBLIC_FIXTURE_DIR=$fixtureDir" | Out-File -FilePath $env:GITHUB_ENV', prepare)
+        self.assertLess(workflow.index("- name: Require absent public fixture destination"), workflow.index("- name: Restore public synthetic release fixtures"))
+        self.assertIn('if (Test-Path -LiteralPath $fixtureDir) { throw "Public fixture destination already exists" }', prepare)
         gate = workflow.split("- name: Run OnGROW Rust tests", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn('(Resolve-Path -LiteralPath $env:ONGROW_PUBLIC_FIXTURE_DIR).Path', gate)
         self.assertLess(gate.index("ONGROW_RELEASE_TEST_FIXTURE_DIR"), gate.index("cargo test --locked --lib --features flutter ongrow_update"))
         self.assertIn('if ($LASTEXITCODE -ne 0) { throw "OnGROW signed update tests failed" }', gate)
+
+    def test_public_export_exact_bytes_and_two_exclusive_run_outputs_without_pem_reads(self):
+        real_read_bytes, real_read_text = Path.read_bytes, Path.read_text
+
+        def guarded_bytes(path):
+            self.assertNotEqual(path.suffix, ".pem")
+            return real_read_bytes(path)
+
+        def guarded_text(path, *args, **kwargs):
+            self.assertNotEqual(path.suffix, ".pem")
+            return real_read_text(path, *args, **kwargs)
+
+        for run in ("run-1-attempt-1", "run-1-attempt-2"):
+            destination = self.root / run
+            with mock.patch.object(Path, "read_bytes", new=guarded_bytes), \
+                    mock.patch.object(Path, "read_text", new=guarded_text), \
+                    mock.patch("builtins.print") as printed:
+                export_public_fixtures(destination)
+            printed.assert_called_once_with("Exported exactly four public synthetic verifier fixtures")
+            self.assertEqual(sorted(p.name for p in destination.iterdir()), sorted(PUBLIC_FIXTURES))
+            public = (destination / "public.key").read_bytes()
+            raw = (destination / "manifest.json").read_bytes()
+            signature = (destination / "manifest.sig").read_bytes()
+            payload = (destination / "payload.bin").read_bytes()
+            self.assertEqual(len(public), 32)
+            self.assertEqual(len(signature), 64)
+            self.verify(raw, signature, public)
+            manifest = json.loads(raw)
+            self.assertEqual(manifest["sha256"], hashlib.sha256(payload).hexdigest())
+            self.assertEqual(manifest["size"], len(payload))
+            before = {p.name: p.read_bytes() for p in destination.iterdir()}
+            with self.assertRaisesRegex(signing.SigningError, "Existing output"):
+                export_public_fixtures(destination)
+            self.assertEqual({p.name: p.read_bytes() for p in destination.iterdir()}, before)
+
+    def test_public_export_refuses_cached_destination_unsafe_parent_and_symlinks_before_keygen(self):
+        cached = self.root / "cached-target"
+        cached.mkdir()
+        marker = cached / "public.key"
+        marker.write_bytes(b"foreign cached bytes")
+        alias = self.root / "alias"
+        alias.symlink_to(cached, target_is_directory=True)
+        unsafe = self.root / "unsafe-parent"
+        unsafe.mkdir()
+        unsafe.chmod(0o775)
+        paths = [cached, alias, alias / "output"]
+        if hasattr(os, "getuid"):
+            paths.append(unsafe / "output")
+        with mock.patch.object(signing, "init_key") as keygen:
+            for destination in paths:
+                with self.subTest(destination=destination.name), self.assertRaises(signing.SigningError):
+                    export_public_fixtures(destination)
+            keygen.assert_not_called()
+        self.assertEqual(marker.read_bytes(), b"foreign cached bytes")
+        self.assertEqual(list(unsafe.iterdir()), [])
+
+    def test_public_export_failure_never_removes_foreign_leftover(self):
+        destination = self.root / "public-export"
+        real_write = signing.OwnedPaths.write
+
+        def fail(owned, path, data):
+            if path.parent == destination:
+                real_write(owned, path, data)
+                (destination / "foreign-leftover").write_bytes(b"must survive")
+                raise signing.SigningError("Synthetic export failure")
+            return real_write(owned, path, data)
+
+        with mock.patch.object(signing.OwnedPaths, "write", new=fail), self.assertRaises(signing.SigningError):
+            export_public_fixtures(destination)
+        self.assertEqual([p.name for p in destination.iterdir()], ["foreign-leftover"])
+        self.assertEqual((destination / "foreign-leftover").read_bytes(), b"must survive")
+
+    def test_public_export_replaced_directory_or_symlink_is_rejected_without_foreign_cleanup(self):
+        real_write = signing.OwnedPaths.write
+        for redirected in (False, True):
+            destination = self.root / f"public-export-{redirected}"
+            saved = self.root / f"saved-export-{redirected}"
+            foreign = self.root / f"foreign-export-{redirected}"
+            foreign.mkdir()
+            (foreign / "public.key").write_bytes(b"foreign replacement")
+
+            def replace(owned, path, data):
+                real_write(owned, path, data)
+                if path.parent == destination:
+                    destination.rename(saved)
+                    if redirected:
+                        destination.symlink_to(foreign, target_is_directory=True)
+                    else:
+                        foreign.rename(destination)
+
+            with mock.patch.object(signing.OwnedPaths, "write", new=replace), self.assertRaises(signing.SigningError):
+                export_public_fixtures(destination)
+            self.assertEqual((destination / "public.key").read_bytes(), b"foreign replacement")
+            self.assertEqual([p.name for p in destination.iterdir()], ["public.key"])
+            self.assertEqual([p.name for p in saved.iterdir()], ["public.key"])
+
+    def test_public_export_replaced_file_is_rejected_and_not_cleaned(self):
+        destination = self.root / "public-export"
+        real_write = signing.OwnedPaths.write
+
+        def replace(owned, path, data):
+            real_write(owned, path, data)
+            if path == destination / "public.key":
+                path.rename(self.root / "saved-public.key")
+                path.write_bytes(b"foreign replacement")
+
+        with mock.patch.object(signing.OwnedPaths, "write", new=replace), self.assertRaisesRegex(signing.SigningError, "file changed"):
+            export_public_fixtures(destination)
+        self.assertEqual([p.name for p in destination.iterdir()], ["public.key"])
+        self.assertEqual((destination / "public.key").read_bytes(), b"foreign replacement")
+
+
+def check_export_directory(destination, expected_identity):
+    signing.local_path(destination / "public.key")
+    metadata = destination.lstat()
+    signing.safe_metadata(metadata, directory=True, private=True)
+    if signing.identity(metadata) != expected_identity:
+        raise signing.SigningError("Public fixture directory changed")
 
 
 def export_public_fixtures(destination):
     destination = signing.local_path(destination)
     signing.absent(destination)
     owned = signing.OwnedPaths()
+    destination_identity = None
     with temporary_directory() as temporary:
         root = Path(temporary).resolve()
         keys = root / "keys"
@@ -428,16 +567,32 @@ def export_public_fixtures(destination):
                              issued_at=90, expires_at=110, origin="https://updates.example.test",
                              path_prefix="/releases/", now=100)
         try:
+            signing.local_path(destination)
             if not destination.parent.exists():
                 owned.mkdir(destination.parent)
             owned.mkdir(destination)
+            destination_identity = signing.identity(destination.lstat())
             for name, source in (("public.key", keys / signing.PUBLIC_NAME), ("manifest.json", output / "manifest.json"),
                                  ("manifest.sig", output / "manifest.sig"), ("payload.bin", output / payload.name)):
+                check_export_directory(destination, destination_identity)
                 owned.write(destination / name, source.read_bytes())
+                check_export_directory(destination, destination_identity)
             if sorted(p.name for p in destination.iterdir()) != sorted(PUBLIC_FIXTURES):
                 raise signing.SigningError("Unexpected fixture export entry")
+            for path, inode in owned.files:
+                metadata = signing.regular_file(path)
+                if signing.identity(metadata) != inode:
+                    raise signing.SigningError("Public fixture file changed")
         except Exception:
-            owned.cleanup()
+            try:
+                if destination_identity is not None:
+                    check_export_directory(destination, destination_identity)
+                else:
+                    signing.local_path(destination)
+            except (signing.SigningError, OSError):
+                pass  # A replaced/redirected directory is no longer our cleanup target.
+            else:
+                owned.cleanup()
             raise
     print("Exported exactly four public synthetic verifier fixtures")
 

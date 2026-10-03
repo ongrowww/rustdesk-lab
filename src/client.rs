@@ -205,7 +205,9 @@ impl Client {
             &'static str,
         ),
         (i32, String),
+        crate::ongrow_update::session_gate::SessionLease,
     )> {
+        let session_lease = crate::ongrow_update::session_gate::admit()?;
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
@@ -229,7 +231,7 @@ impl Client {
                         interface.get_lch().write().unwrap().set_direct_failure(n);
                     }
                 }
-                Ok((x.0, x.1))
+                Ok((x.0, x.1, session_lease))
             }
         }
     }

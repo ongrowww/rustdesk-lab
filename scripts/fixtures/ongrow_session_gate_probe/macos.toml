@@ -1,0 +1,9 @@
+[package]
+name = "ongrow-session-gate-probe"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+libc = "=0.2.171"

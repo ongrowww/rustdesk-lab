@@ -71,10 +71,10 @@ pub async fn listen(
                 let mut forward = Framed::new(forward, BytesCodec::new());
                 let mut close_port_forward = false;
                 match connect_and_login(&id, &password, &mut ui_receiver, interface.clone(), &mut forward, key, token, is_rdp, &mut close_port_forward).await {
-                    Ok(Some(stream)) => {
+                    Ok(Some((stream, session_lease))) => {
                         let interface = interface.clone();
                         tokio::spawn(async move {
-                            if let Err(err) = run_forward(forward, stream).await {
+                            if let Err(err) = run_forward(forward, stream, session_lease).await {
                                 interface.msgbox("error", "Error", &err.to_string(), "");
                             }
                             log::info!("connection from {:?} closed", addr);
@@ -116,13 +116,13 @@ async fn connect_and_login(
     token: &str,
     is_rdp: bool,
     close_port_forward: &mut bool,
-) -> ResultType<Option<Stream>> {
+) -> ResultType<Option<(Stream, crate::ongrow_update::session_gate::SessionLease)>> {
     let conn_type = if is_rdp {
         ConnType::RDP
     } else {
         ConnType::PORT_FORWARD
     };
-    let ((mut stream, direct, _pk, _kcp, _stream_type), (feedback, rendezvous_server)) =
+    let ((mut stream, direct, _pk, _kcp, _stream_type), (feedback, rendezvous_server), session_lease) =
         Client::start(id, key, token, conn_type, interface.clone()).await?;
     interface.update_direct(Some(direct));
     if !stream.is_secured() && !crate::common::is_direct_ip_access(id) {
@@ -201,10 +201,11 @@ async fn connect_and_login(
     if !buffer.is_empty() {
         allow_err!(stream.send_bytes(buffer.into()).await);
     }
-    Ok(Some(stream))
+    Ok(Some((stream, session_lease)))
 }
 
-async fn run_forward(forward: Framed<TcpStream, BytesCodec>, stream: Stream) -> ResultType<()> {
+async fn run_forward(forward: Framed<TcpStream, BytesCodec>, stream: Stream, session_lease: crate::ongrow_update::session_gate::SessionLease) -> ResultType<()> {
+    let _session_lease = session_lease;
     log::info!("new port forwarding connection started");
     let mut forward = forward;
     let mut stream = stream;
