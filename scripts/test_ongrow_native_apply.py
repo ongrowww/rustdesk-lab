@@ -2,6 +2,7 @@
 """Original native gate tests and a CI-only adapter, without production authority."""
 import argparse
 import gc
+import io
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 from test_ongrow_update_session_gate import windows_probe_state_directory
 
@@ -195,8 +197,8 @@ class ProbeChild:
                 self.process.kill()
             else:
                 self.assert_alive()
-                self.process.stdin.write("exit\n")
-                self.process.stdin.flush()
+                self.process.stdin.buffer.write(b"exit\n")
+                self.process.stdin.buffer.flush()
             code = self.process.wait(timeout=10)
             if (crash and code == 0) or (not crash and code != 0):
                 raise RuntimeError("unexpected gate child exit")
@@ -400,6 +402,62 @@ class SourceTests(unittest.TestCase):
         cleanup = script.split("foreach ($v in @(3,2,1)) {", 1)[1].split("foreach ($item in $sharedSentinels)", 1)[0]
         self.assertIn("if ($script:NativeMsiInFlight) { break }", cleanup)
         self.assertLess(cleanup.index("if ($script:NativeMsiInFlight)"), cleanup.index("try { Invoke-Msi"))
+
+
+class WindowsPipeTests(unittest.TestCase):
+    def test_actual_close_sends_lf_through_windows_text_pipe_and_rejects_text_mutation(self):
+        actual_wires = []
+        def exercise(close):
+            raw = io.BytesIO()
+            stdin = io.TextIOWrapper(raw, encoding="utf-8", errors="strict", newline="\r\n")
+            stdout = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
+            captured = []
+            def wait(timeout):
+                self.assertEqual(timeout, 10)
+                # Capture after the actual close implementation has flushed,
+                # before its unchanged finally closes the owned buffer.
+                captured.append(raw.getvalue())
+                return 0
+            child = ProbeChild.__new__(ProbeChild)
+            child.process = SimpleNamespace(stdin=stdin, stdout=stdout, wait=wait,
+                poll=mock.Mock(side_effect=[None, 0]), kill=mock.Mock())
+            child.reader = mock.Mock()
+            child.reader.is_alive.return_value = False
+            close(child, crash=False)
+            self.assertTrue(stdin.closed)
+            self.assertTrue(stdout.closed)
+            child.process.kill.assert_not_called()
+            child.reader.join.assert_called_once_with(timeout=10)
+            self.assertEqual(len(captured), 1)
+            actual_wires.append(captured[0])
+            self.assertEqual(captured[0], b"exit\n", "actual flushed exit bytes must be LF")
+
+        exercise(ProbeChild.close)
+        control_raw = io.BytesIO()
+        control = io.TextIOWrapper(control_raw, encoding="utf-8", errors="strict", newline="\r\n")
+        try:
+            control.write("exit\n")
+            control.flush()
+            self.assertEqual(control_raw.getvalue(), b"exit\r\n")
+        finally:
+            control.close()
+        print("WINDOWS_EXIT_PIPE_EXACT_LF_AND_CRLF_CONTROL_PASS")
+
+        # Change the entire write/flush pair, not just write. Otherwise an
+        # empty unflushed buffer could falsely look like CRLF rejection.
+        binary_pair = ('                self.process.stdin.buffer.write(b"exit\\n")\n'
+                       '                self.process.stdin.buffer.flush()')
+        text_pair = ('                self.process.stdin.write("exit\\n")\n'
+                     '                self.process.stdin.flush()')
+        original = text(Path(__file__))
+        self.assertEqual(original.count(binary_pair), 1)
+        namespace = {"__name__": "ongrow_exit_pipe_text_mutation", "__file__": __file__}
+        exec(compile(original.replace(binary_pair, text_pair, 1),
+                     __file__ + "[text-pipe-mutation]", "exec"), namespace)
+        with self.assertRaisesRegex(AssertionError, "actual flushed exit bytes must be LF"):
+            exercise(namespace["ProbeChild"].close)
+        self.assertEqual(actual_wires, [b"exit\n", b"exit\r\n"])
+        print("WINDOWS_EXIT_PIPE_TEXT_MUTATION_REJECTED")
 
 
 class NativeTests(unittest.TestCase):
