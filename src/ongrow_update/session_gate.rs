@@ -180,4 +180,7 @@ pub(crate) fn acquire_pending_recovery() -> Result<PendingRecoveryLease, Error> 
 #[cfg(all(test, ongrow_pending_recovery_probe, any(target_os = "macos", target_os = "windows")))]
 #[path = "pending_recovery_tests.rs"]
 mod pending_recovery_tests;
+#[cfg(all(test, ongrow_native_apply_probe, any(target_os = "macos", target_os = "windows")))]
+#[path = "native_apply_tests.rs"]
+mod native_apply_tests;
 // ONGROW_STORE_ADDITIONS_END

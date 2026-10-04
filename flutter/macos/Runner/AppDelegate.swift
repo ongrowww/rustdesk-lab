@@ -3,6 +3,7 @@ import FlutterMacOS
 
 @main
 class AppDelegate: FlutterAppDelegate {
+    private let onGrowUpdater = OnGrowUpdater()
     var launched = false;
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
       dummy_method_to_enforce_bundling()
@@ -19,6 +20,7 @@ class AppDelegate: FlutterAppDelegate {
     
     override func applicationDidFinishLaunching(_ aNotification: Notification) {
         launched = true;
+        onGrowUpdater.startIfSafe()
         NSApplication.shared.activate(ignoringOtherApps: true);
     }
 }

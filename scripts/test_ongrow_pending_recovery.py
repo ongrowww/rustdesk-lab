@@ -16,6 +16,43 @@ from test_ongrow_update_session_gate import windows_probe_state_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_pending_recovery_probe/lib.rs"
+BASELINE = "8be346aff0a8a423af51c85d0faa6d66f05c5b07"
+NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
+PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
+SCOPE = (
+    "scripts/package_ongrow_windows_setup.py",
+    "scripts/package_ongrow_windows_msi.py",
+    "scripts/test_ongrow_windows_msi.py",
+    "scripts/test_ongrow_windows_msi_lifecycle.ps1",
+    "scripts/fixtures/ongrow_msi_probe.cs",
+    "res/msi/ongrow/Package.wixproj",
+    "res/msi/ongrow/Package.wxs",
+    ".github/workflows/ongrow-autoupdate-windows-lab.yml",
+    "docs/ongrow-windows-autoupdate.md",
+    "flutter/macos/Runner.xcodeproj/project.pbxproj",
+    "flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+    "flutter/macos/Runner/AppDelegate.swift",
+    "flutter/macos/Runner/Info.plist",
+    "flutter/macos/Runner/OnGrowUpdatePolicy.swift",
+    "flutter/macos/Runner/OnGrowUpdater.swift",
+    "scripts/apply_ongrow_macos_update_profile.py",
+    "scripts/test_ongrow_macos_update_profile.py",
+    "scripts/test_ongrow_macos_update_policy.swift",
+    "scripts/fixtures/ongrow_sparkle_probe/keys.swift",
+    "scripts/fixtures/ongrow_sparkle_probe/main.swift",
+    "scripts/test_ongrow_sparkle_probe.py",
+    ".github/workflows/ongrow-autoupdate-macos-lab.yml",
+    "docs/ongrow-macos-autoupdate.md",
+    ".github/workflows/ongrow-lab-macos-arm64.yml",
+    ".github/workflows/ongrow-support-console-macos-arm64.yml",
+    "src/ongrow_update/session_gate.rs",
+    "src/ongrow_update/native_apply_tests.rs",
+    "scripts/fixtures/ongrow_native_apply_probe/lib.rs",
+    "scripts/test_ongrow_native_apply.py",
+    "scripts/test_ongrow_pending_recovery.py",
+    ".github/workflows/ongrow-pending-recovery-lab.yml",
+    "docs/ongrow-native-apply.md",
+)
 OLD_ADDITIONS = {
     "session_gate.rs": (2534, "8d183bf159bb94d1198233a61f9f5df4992dfaa07adc312d8e3c05fa3fb287d6"),
     "session_gate/macos.rs": (3979, "6b39337d3b1270ce96b96e20b771488ade5e0ee8f727a3ff20297d7d6583fb72"),
@@ -37,11 +74,17 @@ class SourceTests(unittest.TestCase):
                 block = addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name]).encode("utf-8")
                 self.assertEqual(hashlib.sha256(block[:length]).hexdigest(), digest)
                 self.assertGreater(len(block), length)
+        block = addition(ROOT / "src/ongrow_update/session_gate.rs", ORIGINAL["session_gate.rs"]).encode("utf-8")
+        length, digest = PENDING_GATE_FREEZE
+        self.assertEqual(hashlib.sha256(block[:length]).hexdigest(), digest)
+        self.assertEqual(block[length:].decode("utf-8", errors="strict"), NATIVE_DECLARATION)
 
     def test_factory_owns_same_exclusive_lock_without_new_authority(self):
         blocks = {name: addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name])
                   .encode("utf-8")[length:].decode("utf-8", errors="strict")
                   for name, (length, _) in OLD_ADDITIONS.items()}
+        self.assertTrue(blocks["session_gate.rs"].endswith(NATIVE_DECLARATION))
+        blocks["session_gate.rs"] = blocks["session_gate.rs"].removesuffix(NATIVE_DECLARATION)
         gate = blocks["session_gate.rs"]
         self.assertIn("pub(crate) struct PendingRecoveryLease { _lock: os::Lock }", gate)
         self.assertIn("lock.require_pending()?;\n    Ok(PendingRecoveryLease { _lock: lock })", gate)
@@ -87,18 +130,58 @@ class SourceTests(unittest.TestCase):
                          "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9",
                          "SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
                          'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"',
-                         'git diff --exit-code d8b2202e3e8747f949d0a94625aa02c8bfe18ce7 "$SOURCE_SHA" -- .',
+                         'git diff --exit-code ' + BASELINE + ' "$SOURCE_SHA" -- .',
                          "python scripts/test_ongrow_pending_recovery.py", "python scripts/test_ongrow_update_store.py",
                          "python scripts/test_ongrow_update_session_gate.py", "python scripts/test_ongrow_product_profile.py",
                          "python scripts/test_ongrow_ci_isolation.py", "      - '.gitattributes'"):
             self.assertIn(required, workflow)
-        self.assertEqual(re.findall(r"'\:\(exclude\)([^']+)'", workflow), [
-            "src/ongrow_update/session_gate.rs", "src/ongrow_update/session_gate/macos.rs",
-            "src/ongrow_update/session_gate/windows.rs", "src/ongrow_update/pending_recovery_tests.rs",
-            "scripts/test_ongrow_pending_recovery.py", "scripts/fixtures/ongrow_pending_recovery_probe/lib.rs",
-            ".github/workflows/ongrow-pending-recovery-lab.yml", "docs/ongrow-pending-recovery.md"])
-        for forbidden in ("secrets.", "upload-artifact", "sudo", "flutter", "Set-Acl", "cargo build"):
+        self.assertEqual(re.findall(r"'\:\(exclude\)([^']+)'", workflow), list(SCOPE))
+        for forbidden in ("secrets.", "upload-artifact", "sudo", "Set-Acl", "cargo build"):
             self.assertNotIn(forbidden, workflow)
+        # Concrete project paths are data, never permission to execute Flutter.
+        runs = re.findall(r"(?m)^        run: \|\n((?:^          .*\n|^\n)*)", workflow)
+        self.assertEqual(len(runs), 2)
+        for run in runs:
+            # Remove only the exact quoted Git pathspec arguments from the
+            # frozen allowlist. Any other Flutter text in executable code fails.
+            for path in SCOPE:
+                run = run.replace("':(exclude)" + path + "'", "")
+            self.assertNotIn("flutter", run.lower())
+            self.assertNotIn("xcodebuild", run.lower())
+
+    def test_actual_whole_repo_freeze_accepts_only_exact_scope_paths(self):
+        environment = {name: value for name, value in os.environ.items() if not name.upper().startswith("GIT_")}
+        environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1")
+        target = ROOT / "target/ongrow-pending-recovery-scope"
+        target.mkdir(parents=True, exist_ok=True)
+        allowed = "src/ongrow_update/native_apply_tests.rs"
+        forbidden = ("src/ongrow_update/mod.rs", "src/ongrow_update/session_gate/macos.rs", "Cargo.toml")
+        for changed in (allowed, *forbidden):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="scope-", dir=target) as directory:
+                scratch = Path(directory)
+                hooks, template = scratch / "hooks", scratch / "template"
+                hooks.mkdir(); template.mkdir()
+                def git(*arguments, check=True):
+                    return subprocess.run(["git", "-c", "core.hooksPath=" + str(hooks),
+                        "-c", "commit.gpgSign=false", "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", *arguments],
+                        cwd=scratch, env=environment, capture_output=True,
+                        encoding="utf-8", errors="strict", timeout=30, check=check)
+                git("init", "--template=" + str(template))
+                for name in (allowed, *forbidden):
+                    path = scratch / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("original fixture\n", encoding="utf-8", errors="strict")
+                git("add", "--", allowed, *forbidden)
+                git("commit", "-m", "fixture baseline")
+                baseline = git("rev-parse", "HEAD").stdout.strip()
+                (scratch / changed).write_text("changed fixture\n", encoding="utf-8", errors="strict")
+                git("add", "--", changed)
+                git("commit", "-m", "fixture mutation")
+                # Same baseline-to-exact-HEAD comparison and concrete exclusions as CI.
+                result = git("diff", "--exit-code", baseline, "HEAD", "--", ".",
+                             *(":(exclude)" + path for path in SCOPE), check=False)
+                self.assertEqual(result.returncode, 0 if changed == allowed else 1, result.stderr)
 
     def test_gate_snapshot_checks_zero_length_identity_and_actual_lock_denial(self):
         native = source(ROOT / "src/ongrow_update/pending_recovery_tests.rs")
