@@ -267,7 +267,9 @@ class NativeGate:
     def __init__(self, build):
         self.build = build
         self.directory = FixtureDirectory(prefix="guardian-", dir=build.state)
-        self.root = Path(self.directory.name)
+        # Windows's protected leaf and its files are all created by the same
+        # isolated Rust fixture thread, not by an elevated Python default owner.
+        self.root = Path(self.directory.name) / "gate" if sys.platform == "win32" else Path(self.directory.name)
         self.owner = None
         self.mode = None
         self.native_in_flight = False
@@ -514,7 +516,7 @@ class SourceTests(unittest.TestCase):
         native = text(ROOT / "src/ongrow_update/native_apply_tests.rs")
         self.assertIn("let mut lock = os::fixture_acquire(path, true)?;\n    lock.mark_pending()?;\n    Ok(Transaction { lock })", native)
         self.assertIn("pending_recovery_lease(os::fixture_acquire(path, true)?)", native)
-        self.assertEqual(len(re.findall(r"#\[test\]\s*fn (?!native_child)\w+", native)), 8)
+        self.assertEqual(len(re.findall(r"(?m)^#\[test\]\s*fn (?!native_child)\w+", native)), 8)
         for forbidden in ("VerifiedHealth", "mark_ready", "commit_healthy", "thread::sleep", "killall"):
             self.assertNotIn(forbidden, native)
         self.assertIn("self.child.kill()", native)
@@ -757,6 +759,8 @@ class BootstrapDiagnosticTests(unittest.TestCase):
                         test.assertIs(actual_build, build)
                         test.assertEqual(action, "bootstrap")
                         child.status, child.root, child.joined = status, root, False
+                        if not root.exists():
+                            root.mkdir(mode=0o700)
                         roots.append(root)
                     def close(child):
                         events.append("normal-close-and-reader-join")
@@ -835,11 +839,19 @@ class BootstrapDiagnosticTests(unittest.TestCase):
 class NativeTests(unittest.TestCase):
     def test_native_twice_missing_input_and_ordinary_app(self):
         with ProbeBuild() as build:
-            names = re.findall(r"#\[test\]\s*fn (\w+)", text(ROOT / "src/ongrow_update/native_apply_tests.rs"))
+            names = re.findall(r"(?m)^#\[test\]\s*fn (\w+)", text(ROOT / "src/ongrow_update/native_apply_tests.rs"))
             listing = build.run(["--", "--list"])
             self.assertEqual(listing.returncode, 0, listing.stderr)
             for name in names:
                 self.assertIn(PREFIX + name + ": test", listing.stdout)
+            windows_cases = ("fixture_owner_is_user_and_primary_context_is_unchanged",
+                             "original_gate_still_rejects_wrong_root_and_journal_owner")
+            for name in windows_cases:
+                discovered = PREFIX + "windows_fixture::" + name + ": test"
+                if sys.platform == "win32":
+                    self.assertIn(discovered, listing.stdout)
+                else:
+                    self.assertNotIn(discovered, listing.stdout)
             for serial in (False, True):
                 environment = build.environment.copy()
                 arguments = [PREFIX, "--", "--nocapture"]
@@ -850,7 +862,11 @@ class NativeTests(unittest.TestCase):
                     environment.pop("RUST_TEST_THREADS", None)
                 result = build.run(arguments, environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("9 passed; 0 failed; 0 ignored", result.stdout)
+                count = 11 if sys.platform == "win32" else 9
+                self.assertIn(f"{count} passed; 0 failed; 0 ignored", result.stdout)
+                if sys.platform == "win32":
+                    self.assertIn("WINDOWS_FIXTURE_USER_OWNER_PRIMARY_UNCHANGED_PASS", result.stdout)
+                    self.assertIn("WINDOWS_WRONG_ROOT_AND_FILE_OWNER_STILL_REJECTED_PASS", result.stdout)
                 self.assertIn("NATIVE_APPLY_GATE_PASS", result.stdout)
                 print(("serial" if serial else "normal") + "\n" + result.stdout)
             # Exercise the same pipe adapter used around the CI native installers.

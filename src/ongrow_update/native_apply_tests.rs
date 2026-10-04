@@ -5,6 +5,173 @@ use std::{fs, io::{BufRead, Read, Write}, path::{Path, PathBuf},
     thread, time::{Duration, Instant}};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
+
+// Disposable fixture construction only. This never changes the process token,
+// token privileges/groups, existing state, or any production gate decision.
+#[cfg(target_os = "windows")]
+mod windows_fixture {
+    use super::*;
+    use windows::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        Security::{DuplicateTokenEx, EqualSid, GetLengthSid, GetTokenInformation,
+            IsValidSid, SetTokenInformation, SecurityImpersonation, TokenImpersonation,
+            TokenOwner, TokenUser, TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE,
+            TOKEN_IMPERSONATE, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER},
+        System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken,
+            OpenThreadToken, SetThreadToken},
+    };
+
+    struct Token(HANDLE);
+    impl Drop for Token {
+        fn drop(&mut self) { unsafe { let _ = CloseHandle(self.0); } }
+    }
+    fn process_token() -> Result<Token, Error> {
+        let mut token = Token(HANDLE::default());
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &mut token.0) }
+            .map_err(|_| Error::Io)?;
+        Ok(token)
+    }
+    fn thread_token() -> Result<Option<Token>, Error> {
+        let mut token = Token(HANDLE::default());
+        match unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_IMPERSONATE, true, &mut token.0) } {
+            Ok(()) => Ok(Some(token)),
+            // HRESULT_FROM_WIN32(ERROR_NO_TOKEN), not arbitrary access failure.
+            Err(error) if error.code().0 as u32 == 0x8007_03f0 => Ok(None),
+            Err(_) => Err(Error::Io),
+        }
+    }
+    fn information(token: &Token, class: windows::Win32::Security::TOKEN_INFORMATION_CLASS) -> Result<Vec<usize>, Error> {
+        let mut size = 0;
+        let _ = unsafe { GetTokenInformation(token.0, class, None, 0, &mut size) };
+        if size == 0 || size > 64 * 1024 { return Err(Error::Untrusted); }
+        let mut buffer = vec![0usize; (size as usize + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>()];
+        unsafe { GetTokenInformation(token.0, class, Some(buffer.as_mut_ptr().cast()), size, &mut size) }
+            .map_err(|_| Error::Io)?;
+        Ok(buffer)
+    }
+    fn owner_snapshot(token: &Token) -> Result<Vec<u8>, Error> {
+        let buffer = information(token, TokenOwner)?;
+        let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_OWNER>()).Owner };
+        if !unsafe { IsValidSid(sid) }.as_bool() { return Err(Error::Untrusted); }
+        let length = unsafe { GetLengthSid(sid) } as usize;
+        if length == 0 || length > 256 { return Err(Error::Untrusted); }
+        Ok(unsafe { std::slice::from_raw_parts(sid.0.cast::<u8>(), length) }.to_vec())
+    }
+    struct OwnerScope {
+        previous: Option<Token>, _duplicate: Token,
+        _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+    impl OwnerScope {
+        fn current_user() -> Result<Self, Error> {
+            let primary = process_token()?;
+            let user = information(&primary, TokenUser)?;
+            let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+            Self::with_owner(&primary, sid)
+        }
+        fn with_owner(primary: &Token, sid: windows::Win32::Security::PSID) -> Result<Self, Error> {
+            if !unsafe { IsValidSid(sid) }.as_bool() { return Err(Error::Untrusted); }
+            let previous = thread_token()?;
+            let mut duplicate = Token(HANDLE::default());
+            unsafe { DuplicateTokenEx(primary.0, TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_ADJUST_DEFAULT,
+                None, SecurityImpersonation, TokenImpersonation, &mut duplicate.0) }.map_err(|_| Error::Io)?;
+            let owner = TOKEN_OWNER { Owner: sid };
+            unsafe { SetTokenInformation(duplicate.0, TokenOwner,
+                (&owner as *const TOKEN_OWNER).cast(), std::mem::size_of::<TOKEN_OWNER>() as u32) }
+                .map_err(|_| Error::Io)?;
+            let copied = information(&duplicate, TokenOwner)?;
+            let copied_sid = unsafe { (*copied.as_ptr().cast::<TOKEN_OWNER>()).Owner };
+            unsafe { EqualSid(sid, copied_sid) }.map_err(|_| Error::Untrusted)?;
+            unsafe { SetThreadToken(None, Some(duplicate.0)) }.map_err(|_| Error::Io)?;
+            Ok(Self { previous, _duplicate: duplicate, _thread_bound: std::marker::PhantomData })
+        }
+    }
+    impl Drop for OwnerScope {
+        fn drop(&mut self) {
+            // Test-only fail closed. Never continue fixture operations in an
+            // unexpected impersonation context if restoration fails.
+            assert!(unsafe { SetThreadToken(None, self.previous.as_ref().map(|token| token.0)) }.is_ok(),
+                "fixture thread context restoration failed");
+        }
+    }
+    pub(super) fn bootstrap(path: &Path) -> Result<(), Error> {
+        let base = PathBuf::from(std::env::var_os("ONGROW_NATIVE_APPLY_TEST_ROOT").ok_or(Error::Untrusted)?);
+        let relative = path.strip_prefix(&base).map_err(|_| Error::Untrusted)?;
+        let parts: Vec<_> = relative.components().collect();
+        if parts.len() != 2 || path.file_name() != Some(std::ffi::OsStr::new("gate"))
+            || !matches!(parts[0], std::path::Component::Normal(name) if name.to_string_lossy().starts_with("guardian-"))
+        { return Err(Error::Untrusted); }
+        use std::os::windows::fs::MetadataExt;
+        for parent in [base.as_path(), path.parent().ok_or(Error::Untrusted)?] {
+            let metadata = fs::symlink_metadata(parent).map_err(|_| Error::Untrusted)?;
+            if !metadata.is_dir() || metadata.file_attributes() & 0x400 != 0 { return Err(Error::Untrusted); }
+        }
+        let _scope = OwnerScope::current_user()?;
+        // create_dir is exclusive. Existing/partial roots are never repaired.
+        fs::create_dir(path).map_err(|_| Error::Untrusted)?;
+        os::fixture_initialize(path)
+    }
+
+    #[test]
+    fn fixture_owner_is_user_and_primary_context_is_unchanged() {
+        let primary = process_token().unwrap();
+        let before = owner_snapshot(&primary).unwrap();
+        assert!(thread_token().unwrap().is_none(), "fresh test thread expected");
+        let base = PathBuf::from(std::env::var_os("ONGROW_NATIVE_APPLY_TEST_ROOT").unwrap());
+        let parent = base.join(format!("guardian-owner-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        fs::create_dir(&parent).unwrap();
+        let path = parent.join("gate");
+        bootstrap(&path).unwrap();
+        // The ORIGINAL gate checks exact user ownership of root and both files.
+        drop(os::fixture_acquire(&path, false).unwrap());
+        error(bootstrap(&path), Error::Untrusted);
+        assert!(before == owner_snapshot(&primary).unwrap(), "primary owner changed");
+        assert!(thread_token().unwrap().is_none(), "fixture context leaked");
+        fs::remove_dir_all(parent).unwrap();
+        println!("WINDOWS_FIXTURE_USER_OWNER_PRIMARY_UNCHANGED_PASS");
+    }
+    #[test]
+    fn original_gate_still_rejects_wrong_root_and_journal_owner() {
+        use windows::Win32::Security::{CreateWellKnownSid, PSID, WinBuiltinAdministratorsSid};
+        let primary = process_token().unwrap();
+        let before = owner_snapshot(&primary).unwrap();
+        let mut storage = [0usize; 16];
+        let admins = PSID(storage.as_mut_ptr().cast());
+        let mut length = std::mem::size_of_val(&storage) as u32;
+        unsafe { CreateWellKnownSid(WinBuiltinAdministratorsSid, None, Some(admins), &mut length) }.unwrap();
+        let base = PathBuf::from(std::env::var_os("ONGROW_NATIVE_APPLY_TEST_ROOT").unwrap());
+        let parent = base.join(format!("guardian-negative-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        fs::create_dir(&parent).unwrap();
+        let wrong_root = parent.join("wrong-root");
+        {
+            let _scope = OwnerScope::with_owner(&primary, admins).unwrap();
+            fs::create_dir(&wrong_root).unwrap();
+            error(os::fixture_initialize(&wrong_root), Error::Untrusted);
+        }
+        assert!(!wrong_root.join("state-v1.journal").exists(), "rejected root was mutated");
+        let wrong_file = parent.join("wrong-file");
+        {
+            let _scope = OwnerScope::current_user().unwrap();
+            fs::create_dir(&wrong_file).unwrap();
+        }
+        {
+            let _scope = OwnerScope::with_owner(&primary, admins).unwrap();
+            error(os::fixture_initialize(&wrong_file), Error::Untrusted);
+        }
+        assert!(wrong_file.join("state-v1.journal").exists(), "journal rejection was not exercised");
+        assert!(!wrong_file.join("admission-v1.lock").exists(), "partial bootstrap continued");
+        assert!(before == owner_snapshot(&primary).unwrap(), "primary owner changed");
+        assert!(thread_token().unwrap().is_none(), "fixture context leaked");
+        fs::remove_dir_all(parent).unwrap();
+        println!("WINDOWS_WRONG_ROOT_AND_FILE_OWNER_STILL_REJECTED_PASS");
+    }
+}
+
+fn bootstrap(path: &Path) -> Result<(), Error> {
+    #[cfg(target_os = "windows")]
+    { windows_fixture::bootstrap(path) }
+    #[cfg(target_os = "macos")]
+    { os::fixture_initialize(path) }
+}
 fn begin(path: &Path) -> Result<Transaction, Error> {
     let mut lock = os::fixture_acquire(path, true)?;
     lock.mark_pending()?;
@@ -170,7 +337,7 @@ fn native_child() {
     let mut transaction = None;
     let mut recovery = None;
     let result = match action.as_str() {
-        "bootstrap" => os::fixture_initialize(&path).map(|_| "Ready"),
+        "bootstrap" => bootstrap(&path).map(|_| "Ready"),
         "session" => os::fixture_acquire(&path, false).map(|lock| { session = Some(lock); "Ready" }),
         "transaction" => begin(&path).map(|owner| { transaction = Some(owner); "Pending" }),
         "recovery" => recover(&path).map(|lease| { recovery = Some(lease); "Pending" }),
