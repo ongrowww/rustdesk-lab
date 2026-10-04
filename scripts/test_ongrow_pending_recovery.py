@@ -100,6 +100,35 @@ class SourceTests(unittest.TestCase):
         for forbidden in ("secrets.", "upload-artifact", "sudo", "flutter", "Set-Acl", "cargo build"):
             self.assertNotIn(forbidden, workflow)
 
+    def test_gate_snapshot_checks_zero_length_identity_and_actual_lock_denial(self):
+        native = source(ROOT / "src/ongrow_update/pending_recovery_tests.rs")
+        snapshot = native.split("    fn snapshot(&self)", 1)[1].split("    fn child(&self", 1)[0]
+        self.assertIn('assert_eq!(fs::metadata(&path).unwrap().len(), 0, "snapshot requires an empty gate");', snapshot)
+        self.assertIn('''#[cfg(target_os = "windows")]
+                { Vec::new() }
+                #[cfg(target_os = "macos")]
+                { fs::read(&path).unwrap() }
+            } else {
+                fs::read(&path).unwrap()
+            };
+            (bytes, identity(&path))''', snapshot)
+        case = native.split("fn gate_snapshot_preserves_lock_and_rejects_nonempty_gate()", 1)[1].split("#[test]", 1)[0]
+        for required in ('let lease = recover(&fixture.0).unwrap();',
+                         'let read_error = fs::read(&gate).unwrap_err();',
+                         'assert_eq!(read_error.raw_os_error(), Some(33));',
+                         '#[cfg(target_os = "macos")]',
+                         'fs::write(&gate, [1]).unwrap();',
+                         'assert_eq!(fs::metadata(&gate).unwrap().len(), 1);',
+                         'assert!(std::panic::catch_unwind(|| fixture.snapshot()).is_err());',
+                         'println!("WINDOWS_GATE_SNAPSHOT_PASS");'):
+            self.assertIn(required, case)
+        self.assertEqual(case.count('assert_eq!(fs::read(&gate).unwrap(), Vec::<u8>::new());'), 3)
+        self.assertEqual(case.count('assert_eq!(before, fixture.snapshot());'), 2)
+        self.assertLess(case.index('assert_eq!(before, fixture.snapshot());'), case.index('drop(lease);'))
+        self.assertLess(case.index('drop(lease);'), case.index('fs::write(&gate, [1]).unwrap();'))
+        self.assertIn('GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information)', native)
+        self.assertNotIn("unwrap_or_default", snapshot)
+
 
 class NativeTests(unittest.TestCase):
     def test_actual_native_cases_crashes_missing_input_and_ordinary_app(self):
@@ -144,7 +173,8 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(listing.returncode, 0, listing.stderr)
             names = re.findall(r"#\[test\]\s*fn (\w+)", source(ROOT / "src/ongrow_update/pending_recovery_tests.rs"))
             actual = [name for name in names if name != "native_child"]
-            self.assertGreaterEqual(len(actual), 8)
+            self.assertGreaterEqual(len(actual), 10)
+            self.assertIn("gate_snapshot_preserves_lock_and_rejects_nonempty_gate", actual)
             prefix = "session_gate::pending_recovery_tests::"
             for name in names:
                 self.assertIn(prefix + name + ": test", listing.stdout)
@@ -157,6 +187,8 @@ class NativeTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn(f"{len(names)} passed; 0 failed; 0 ignored", result.stdout)
                     self.assertIn("NATIVE_PENDING_RECOVERY_PASS", result.stdout)
+                    if platform == "windows":
+                        self.assertIn("WINDOWS_GATE_SNAPSHOT_PASS", result.stdout)
                     print(label + "\n" + result.stdout)
             missing = environment.copy()
             missing.pop("ONGROW_PENDING_RECOVERY_TEST_ROOT", None)

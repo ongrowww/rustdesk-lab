@@ -23,13 +23,23 @@ Der Gesamtupdater ist damit noch nicht fertig.
 
 `python3 scripts/test_ongrow_pending_recovery.py` prüft die unveränderten
 Originalbytes und bisherigen Additionsblöcke, kompiliert das Originalmodul
-mit Rust 1.81 und führt neun native Sachtests aus. Ein zusätzlicher Test ist
+mit Rust 1.81 und führt zehn native Sachtests aus. Ein zusätzlicher Test ist
 der eigene Kindprozess-Einstieg. Echte Kindprozesse belegen Shared-, Pending-
 und Recovery-Locks. Die Probe prüft Übernahme nach kill/wait, feste Dateiidentität,
 unveränderte Bytes und Shared-plus-Pending-Ablehnung durch dieselbe Factory.
 Kindprozess-Guards beenden und warten ausschließlich ihre eigenen Prozesse.
 Ein weiterer nativer Lauf setzt `RUST_TEST_THREADS=1`, damit der serielle
 libtest-Zeilenpräfix den begrenzten Kindprozess-Handshake nicht verhindert.
+
+Der Gate-Snapshot prüft die tatsächliche Dateilänge null und die native
+Dateiidentität. Windows stellt erst nach dieser Längenprüfung die leeren Bytes
+dar, ohne über einen zweiten Handle Daten zu lesen. Das Journal wird weiterhin
+vollständig gelesen. macOS liest zusätzlich die leere Gate-Datei.
+Ein eigener Sachtest liest das Gate vor und nach der Lease. Während des
+exklusiven Locks muss der zweite Datenread unter Windows mit Fehler 33 scheitern,
+unter macOS bleibt er möglich. Der Snapshot bleibt dabei unverändert. Ein
+anschließend nur in der eigenen Fixture auf ein Byte verlängertes Gate muss
+die Snapshot-Prüfung abbrechen.
 
 Das neue Compile-Time-Merkmal `ongrow_pending_recovery_probe` ist nur in der
 separaten Probe gesetzt. Ohne Merkmal und Root entdeckt die gewöhnliche

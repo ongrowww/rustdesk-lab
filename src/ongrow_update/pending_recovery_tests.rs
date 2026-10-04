@@ -53,7 +53,18 @@ impl Fixture {
     fn snapshot(&self) -> Vec<(Vec<u8>, (u64, u64))> {
         [GATE, JOURNAL].iter().map(|name| {
             let path = self.0.join(name);
-            (fs::read(&path).unwrap(), identity(&path))
+            let bytes = if *name == GATE {
+                assert_eq!(fs::metadata(&path).unwrap().len(), 0, "snapshot requires an empty gate");
+                // LockFileEx denies data reads through another handle even
+                // beyond EOF. Metadata and native file identity remain readable.
+                #[cfg(target_os = "windows")]
+                { Vec::new() }
+                #[cfg(target_os = "macos")]
+                { fs::read(&path).unwrap() }
+            } else {
+                fs::read(&path).unwrap()
+            };
+            (bytes, identity(&path))
         }).collect()
     }
     fn child(&self, action: &str) -> ProbeChild {
@@ -164,6 +175,33 @@ fn real_pending_owner_crash_releases_only_kernel_lock() {
     error(os::fixture_acquire(&fixture.0, false), Error::Pending);
     let _lease = recover(&fixture.0).unwrap();
     assert_eq!(before, fixture.snapshot());
+}
+#[test]
+fn gate_snapshot_preserves_lock_and_rejects_nonempty_gate() {
+    let fixture = Fixture::new();
+    fixture.pending();
+    let gate = fixture.0.join(GATE);
+    assert_eq!(fs::read(&gate).unwrap(), Vec::<u8>::new());
+    let before = fixture.snapshot();
+    let lease = recover(&fixture.0).unwrap();
+    #[cfg(target_os = "windows")]
+    {
+        let read_error = fs::read(&gate).unwrap_err();
+        assert_eq!(read_error.raw_os_error(), Some(33));
+    }
+    #[cfg(target_os = "macos")]
+    assert_eq!(fs::read(&gate).unwrap(), Vec::<u8>::new());
+    assert_eq!(before, fixture.snapshot());
+    drop(lease);
+    assert_eq!(fs::read(&gate).unwrap(), Vec::<u8>::new());
+    assert_eq!(before, fixture.snapshot());
+    // Corrupt only our own fixture after releasing its lease. A snapshot must
+    // not turn a nonempty gate into an apparently unchanged empty file.
+    fs::write(&gate, [1]).unwrap();
+    assert_eq!(fs::metadata(&gate).unwrap().len(), 1);
+    assert!(std::panic::catch_unwind(|| fixture.snapshot()).is_err());
+    #[cfg(target_os = "windows")]
+    println!("WINDOWS_GATE_SNAPSHOT_PASS");
 }
 #[test]
 fn z_real_recovery_owner_crash_allows_another_pending_owner() {
