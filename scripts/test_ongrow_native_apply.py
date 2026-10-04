@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Original native gate tests and a CI-only adapter, without production authority."""
 import argparse
+import contextlib
 import gc
 import io
 import json
@@ -299,65 +300,158 @@ class NativeGate:
             self.directory.cleanup()
 
 
+GUARDIAN_PHASES = ("build", "bootstrap", "read", "session", "transaction", "recovery", "admit",
+                   "pending-owner", "native-starting", "assertions-complete", "mutation-unknown",
+                   "end", "crash", "close", "cleanup", "unknown")
+GUARDIAN_RUNTIME_CATEGORIES = {
+    "explicit disposable native CI runner required": "runner",
+    "separately identified MSI probe product required": "product",
+    "exact cached Rust 1.81.0 required": "rust-version",
+    "one isolated gate test executable required": "build-executable",
+    "fresh isolated bootstrap failed": "bootstrap-status",
+    "bounded explicit guardian protocol required": "protocol-bounds",
+    "exact protocol shape required": "protocol-shape",
+    "unknown isolated guardian operation": "protocol-op",
+    "gate child lost before explicit end": "child-lost",
+    "unexpected gate child exit": "child-exit",
+    "bounded child output exceeded": "child-output",
+    "unexpected actual gate status": "child-status",
+    "bounded gate reader exit failed": "child-reader",
+    "existing owner must end explicitly": "owner-existing",
+    "actual guardian ownership required": "owner-missing",
+    "actual owner required for explicit end": "owner-missing",
+    "explicit owner end required before close": "owner-existing",
+    "durable Pending must precede native installer start": "pending-journal",
+    "real other process admission not excluded": "admission",
+    "owner end changed durable gate state": "owner-end",
+    "windows-probe-runner-required": "runner",
+    "windows-probe-api-unavailable": "root-api",
+    "windows-probe-known-folder-error": "root-folder",
+    "windows-probe-known-folder-null": "root-folder",
+    "windows-probe-parent-not-local": "root-path",
+    "windows-probe-parent-not-normal": "root-path",
+    "windows-probe-drive-not-fixed": "root-drive",
+    "windows-probe-drive-error": "root-drive",
+    "windows-probe-attributes-error": "root-attributes",
+    "windows-probe-parent-reparse": "root-attributes",
+    "windows-probe-parent-not-directory": "root-attributes",
+    "windows-probe-state-create-error": "root-create",
+}
+
+
+def report_guardian_failure(phase, error):
+    # Only static categories reach stderr. Exception text/children/env never do.
+    phase = phase if phase in GUARDIAN_PHASES else "unknown"
+    kind, category = "other", "unknown"
+    if isinstance(error, RuntimeError):
+        kind = "runtime"
+        if len(error.args) == 1 and type(error.args[0]) is str:
+            category = GUARDIAN_RUNTIME_CATEGORIES.get(error.args[0], "unknown")
+    elif isinstance(error, (subprocess.TimeoutExpired, TimeoutError, queue.Empty)):
+        kind, category = "timeout", "timeout"
+    elif isinstance(error, UnicodeError):
+        kind, category = "decode", "decode"
+    elif isinstance(error, json.JSONDecodeError):
+        kind, category = "json", "json"
+        if error.msg == "Unexpected UTF-8 BOM (decode using utf-8-sig)":
+            category = "json-bom"
+    elif isinstance(error, BrokenPipeError):
+        kind, category = "io", "pipe"
+    elif isinstance(error, OSError):
+        kind, category = "io", "io"
+    elif isinstance(error, subprocess.CalledProcessError):
+        kind, category = "process", "process"
+    print(f"ONGROW_GUARDIAN_FAILURE phase={phase} kind={kind} category={category}",
+          file=sys.stderr, flush=True)
+
+
 def windows_guardian(product):
-    require_ci("win32")
-    if product not in ("customer-desk", "support-console"):
-        raise RuntimeError("separately identified MSI probe product required")
-    with ProbeBuild() as build:
-        gate = NativeGate(build)
-        messages = queue.Queue(maxsize=1)
-        def read():
-            while True:
-                line = sys.stdin.readline(257)
-                messages.put(line)
-                if not line or len(line) > 256:
-                    return
-        threading.Thread(target=read, daemon=True).start()
-        def send(status):
-            print(json.dumps({"status": status}), flush=True)
-        try:
-            send("Ready")
-            while True:
-                line = messages.get(timeout=240)
-                if not line or len(line) > 256 or not line.endswith("\n"):
-                    raise RuntimeError("bounded explicit guardian protocol required")
-                message = json.loads(line)
-                if not isinstance(message, dict) or set(message) != {"op"}:
-                    raise RuntimeError("exact protocol shape required")
-                op = message["op"]
-                if op in ("session", "transaction", "recovery"):
-                    send(gate.start(op))
-                elif op == "admit":
-                    if gate.owner:
-                        gate.owner.assert_alive()
-                    send(gate.request("admit"))
-                elif op == "pending-owner":
-                    gate.assert_pending_owner()
-                    send("Busy")
-                elif op == "native-starting":
-                    gate.begin_native()
-                    # MSI's original later downgrade/uninstall cases can also
-                    # fail after the guarded phase. Keep this Pending root for
-                    # the entire disposable runner lifetime, including success.
-                    gate.retain_unknown()
-                    send("Busy")
-                elif op == "assertions-complete":
-                    gate.assertions_complete()
-                    send("Busy")
-                elif op == "mutation-unknown":
-                    gate.retain_unknown()
-                    send("Pending")
-                elif op in ("end", "crash"):
-                    send(gate.end(crash=op == "crash"))
-                elif op == "close":
-                    if gate.owner:
-                        raise RuntimeError("explicit owner end required before close")
-                    send("Closed")
-                    break
-                else:
-                    raise RuntimeError("unknown isolated guardian operation")
-        finally:
-            gate.close()
+    phase, diagnosed = "build", False
+    try:
+        require_ci("win32")
+        if product not in ("customer-desk", "support-console"):
+            raise RuntimeError("separately identified MSI probe product required")
+        with ProbeBuild() as build:
+            phase = "bootstrap"
+            gate = NativeGate(build)
+            messages = queue.Queue(maxsize=1)
+            def read():
+                try:
+                    while True:
+                        line = sys.stdin.readline(257)
+                        messages.put(line)
+                        if not line or len(line) > 256:
+                            return
+                except Exception as error:
+                    messages.put(error)
+            threading.Thread(target=read, daemon=True).start()
+            def send(status):
+                print(json.dumps({"status": status}), flush=True)
+            try:
+                send("Ready")
+                while True:
+                    phase = "read"
+                    line = messages.get(timeout=240)
+                    if isinstance(line, Exception):
+                        raise line
+                    if not line or len(line) > 256 or not line.endswith("\n"):
+                        raise RuntimeError("bounded explicit guardian protocol required")
+                    message = json.loads(line)
+                    if not isinstance(message, dict) or set(message) != {"op"}:
+                        raise RuntimeError("exact protocol shape required")
+                    op = message["op"]
+                    if op not in GUARDIAN_PHASES or op in ("build", "bootstrap", "read", "cleanup", "unknown"):
+                        raise RuntimeError("unknown isolated guardian operation")
+                    phase = op
+                    if op in ("session", "transaction", "recovery"):
+                        send(gate.start(op))
+                    elif op == "admit":
+                        if gate.owner:
+                            gate.owner.assert_alive()
+                        send(gate.request("admit"))
+                    elif op == "pending-owner":
+                        gate.assert_pending_owner()
+                        send("Busy")
+                    elif op == "native-starting":
+                        gate.begin_native()
+                        # MSI's original later downgrade/uninstall cases can also
+                        # fail after the guarded phase. Keep this Pending root for
+                        # the entire disposable runner lifetime, including success.
+                        gate.retain_unknown()
+                        send("Busy")
+                    elif op == "assertions-complete":
+                        gate.assertions_complete()
+                        send("Busy")
+                    elif op == "mutation-unknown":
+                        gate.retain_unknown()
+                        send("Pending")
+                    elif op in ("end", "crash"):
+                        send(gate.end(crash=op == "crash"))
+                    elif op == "close":
+                        if gate.owner:
+                            raise RuntimeError("explicit owner end required before close")
+                        send("Closed")
+                        break
+            except Exception as error:
+                report_guardian_failure(phase, error)
+                diagnosed = True
+                raise
+            finally:
+                phase = "cleanup"
+                gate.close()
+    except Exception as error:
+        if not diagnosed:
+            report_guardian_failure(phase, error)
+        raise
+
+
+def windows_guardian_cli(product):
+    # Only this CI adapter suppresses raw default tracebacks. Tests still raise.
+    try:
+        windows_guardian(product)
+    except Exception:
+        return 1
+    return 0
 
 
 class SourceTests(unittest.TestCase):
@@ -458,6 +552,104 @@ class WindowsPipeTests(unittest.TestCase):
             exercise(namespace["ProbeChild"].close)
         self.assertEqual(actual_wires, [b"exit\n", b"exit\r\n"])
         print("WINDOWS_EXIT_PIPE_TEXT_MUTATION_REJECTED")
+
+
+class GuardianDiagnosticTests(unittest.TestCase):
+    def test_known_and_unknown_errors_emit_only_fixed_categories(self):
+        sentinel = "/synthetic/private-path token=SYNTHETIC_TOKEN_SENTINEL"
+        cases = (("transaction", RuntimeError("unexpected gate child exit"), "runtime", "child-exit"),
+                 ("bootstrap", RuntimeError(sentinel), "runtime", "unknown"),
+                 (sentinel, ValueError(sentinel), "other", "unknown"),
+                 ("build", subprocess.CalledProcessError(1, sentinel, stderr=sentinel), "process", "process"),
+                 ("read", json.JSONDecodeError(sentinel, sentinel, 0), "json", "json"),
+                 ("read", UnicodeDecodeError("utf-8", sentinel.encode(), 0, 1, sentinel), "decode", "decode"),
+                 ("read", BrokenPipeError(sentinel), "io", "pipe"),
+                 ("build", subprocess.TimeoutExpired(sentinel, 1), "timeout", "timeout"))
+        for phase, error, kind, category in cases:
+            with self.subTest(kind=kind, category=category):
+                output = io.StringIO()
+                with contextlib.redirect_stderr(output):
+                    report_guardian_failure(phase, error)
+                expected_phase = phase if phase in GUARDIAN_PHASES else "unknown"
+                self.assertEqual(output.getvalue(),
+                    f"ONGROW_GUARDIAN_FAILURE phase={expected_phase} kind={kind} category={category}\n")
+                self.assertNotIn(sentinel, output.getvalue())
+        with self.assertRaises(json.JSONDecodeError) as bom:
+            json.loads('\ufeff{"op":"session"}')
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            report_guardian_failure("read", bom.exception)
+        self.assertEqual(output.getvalue(),
+            "ONGROW_GUARDIAN_FAILURE phase=read kind=json category=json-bom\n")
+        print("GUARDIAN_FIXED_CATEGORIES_NO_RAW_DATA_PASS")
+
+    def test_real_controller_marks_failure_before_actual_gate_cleanup_once(self):
+        # Only OS/Build entry is substituted. NativeGate and its Rust children
+        # bootstrap, acquire a real Transaction and explicitly close as usual.
+        with ProbeBuild() as build:
+            for cleanup_failure in (False, True):
+                context = mock.MagicMock()
+                context.__enter__.return_value = build
+                if cleanup_failure:
+                    context.__exit__.side_effect = RuntimeError("synthetic-cleanup-token")
+                else:
+                    context.__exit__.return_value = False
+                marked_roots = []
+                class ObservedStderr(io.StringIO):
+                    def write(stream, value):
+                        if value.startswith("ONGROW_GUARDIAN_FAILURE"):
+                            roots = list(build.state.glob("guardian-*"))
+                            self.assertEqual(len(roots), 1)
+                            self.assertEqual((roots[0] / "state-v1.journal").read_bytes(), b"\x01")
+                            marked_roots.extend(roots)
+                        return super().write(value)
+                output, status = ObservedStderr(), io.StringIO()
+                expected = RuntimeError if cleanup_failure else json.JSONDecodeError
+                with mock.patch(__name__ + ".require_ci"), mock.patch(__name__ + ".ProbeBuild", return_value=context), \
+                        mock.patch.object(sys, "stdin", io.StringIO('{"op":"transaction"}\n{"op":\n')), \
+                        contextlib.redirect_stderr(output), contextlib.redirect_stdout(status):
+                    with self.assertRaises(expected):
+                        windows_guardian("customer-desk")
+                self.assertEqual(status.getvalue(), '{"status": "Ready"}\n{"status": "Pending"}\n')
+                self.assertEqual(output.getvalue(),
+                    "ONGROW_GUARDIAN_FAILURE phase=read kind=json category=json\n")
+                self.assertEqual(len(marked_roots), 1)
+                self.assertFalse(marked_roots[0].exists())
+        print("GUARDIAN_REAL_CONTROLLER_MARKER_BEFORE_CLEANUP_PASS")
+
+    def test_actual_cli_branch_exits_one_without_traceback_or_sentinel(self):
+        # Execute the unchanged real CLI block. Only CI/build boundaries differ;
+        # no installer or native-success claim is involved in this subprocess.
+        code = '''import sys
+from pathlib import Path
+path = sys.argv[1]
+source = Path(path).read_text(encoding="utf-8", errors="strict")
+namespace = {"__name__": "guardian_cli_failure_test", "__file__": path}
+exec(compile(source, path, "exec"), namespace)
+class FailingBuild:
+    def __enter__(self):
+        raise RuntimeError("/synthetic/private-path token=SYNTHETIC_TOKEN_SENTINEL")
+    def __exit__(self, *arguments):
+        raise AssertionError("failed enter must not exit twice")
+namespace["ProbeBuild"] = FailingBuild
+namespace["require_ci"] = lambda platform: None
+namespace["__name__"] = "__main__"
+sys.argv = [path, "--ci-windows-guardian", "customer-desk"]
+main = source[source.rindex(chr(10) + 'if __name__ == "__main__":') + 1:]
+exec(compile(main, path, "exec"), namespace)
+'''
+        environment = clean_environment()
+        environment["PYTHONPATH"] = str(ROOT / "scripts")
+        result = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve())],
+                                env=environment, capture_output=True, encoding="utf-8", errors="strict", timeout=10)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr,
+            "ONGROW_GUARDIAN_FAILURE phase=build kind=runtime category=unknown\n")
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("SYNTHETIC_TOKEN_SENTINEL", result.stderr)
+        self.assertNotIn("/synthetic/private-path", result.stderr)
+        print("GUARDIAN_ACTUAL_CLI_EXIT_ONE_NO_TRACEBACK_PASS")
 
 
 class NativeTests(unittest.TestCase):
@@ -633,6 +825,6 @@ if __name__ == "__main__":
     if args.ci_windows_guardian:
         if remaining:
             parser.error("guardian accepts no extra commands or paths")
-        windows_guardian(args.ci_windows_guardian)
+        sys.exit(windows_guardian_cli(args.ci_windows_guardian))
     else:
         unittest.main(argv=[__file__, *remaining])

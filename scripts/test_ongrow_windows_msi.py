@@ -289,6 +289,30 @@ class MsiTests(unittest.TestCase):
         self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size,st_ctime_ns")
         self.assertEqual(msi.differing_fields(expected, expected), "")
 
+    def test_guardian_diagnostic_is_bounded_enum_only_and_phase_aware(self):
+        script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")
+        diagnostic = script.split("function Get-GuardianDiagnostic(", 1)[1].split("function Throw-GuardianFailure(", 1)[0]
+        self.assertLess(diagnostic.index("if (-not $Guardian.Process.HasExited)"), diagnostic.index("$Guardian.Errors.Wait(1000)"))
+        self.assertIn("$diagnostic.Length -le 256", diagnostic)
+        self.assertIn("$diagnostic -cmatch $pattern", diagnostic)
+        self.assertIn("\\AONGROW_GUARDIAN_FAILURE phase=", diagnostic)
+        self.assertIn("(\\r?\\n)?\\z", diagnostic)
+        self.assertIn("return 'missing-diagnostic'", diagnostic)
+        self.assertNotIn("ReadToEnd", diagnostic)
+        self.assertNotIn("Write-", diagnostic)
+        failure = script.split("function Throw-GuardianFailure(", 1)[1].split("function Read-Guardian(", 1)[0]
+        self.assertIn("$Phase -notin @('bootstrap','read','session','transaction'", failure)
+        self.assertIn("$Phase = 'unknown'", failure)
+        self.assertIn("$Category = 'unknown'", failure)
+        self.assertIn("exit=$exit $diagnostic", failure)
+        controller = script.split("function Read-Guardian(", 1)[1].split("# Compile production schemas", 1)[0]
+        self.assertIn("$read.Wait(20000)", controller)
+        self.assertIn("Read-Guardian $guardian $false 'bootstrap'", controller)
+        self.assertIn("Read-Guardian $Guardian ($Operation -eq 'close') $Operation", controller)
+        self.assertNotIn("throw $_", controller)
+        self.assertNotIn("throw $read.Result", controller)
+        self.assertNotIn("throw $Guardian.Errors", controller)
+
     def test_native_optional_queries_keep_outer_array_and_preinstall_regression(self):
         script = Path(__file__).with_name("test_ongrow_windows_msi_lifecycle.ps1").read_text()
         for variable, table in (("actions", "CustomAction"), ("services", "ServiceInstall")):
