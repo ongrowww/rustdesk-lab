@@ -47,6 +47,23 @@ Without `--emit-only`, the explicit output compiles with `dotnet build`. Windows
 CI uses a pinned runner-only .NET SDK and WiX SDK; no Mac system installation is
 needed. An incomplete output is intentionally retained and never publishable.
 
+The regular Desk and Console Windows build workflows now call this packager
+after their real executable/core/product/provenance checks. Each produces a
+separate unsigned Lab MSI artifact, SHA-256 sidecar and completion descriptor,
+in addition to the existing ZIP tree. The workflow's monotonic run number is
+the Lab package sequence for that product. Re-running the same workflow run
+preserves its sequence and exact source revision; publishing/signing still
+requires the separate release operation. Neither build installs its production
+MSI or enables automatic installation. The first legacy-to-MSI migration is
+still not automatic.
+
+Payload snapshots compare device/file identity, size and precise modification
+time plus the documented Windows creation time. CPython's deprecated ctime
+can report creation time by path but change time by file descriptor. The
+packager therefore uses birthtime on Windows, requires that field, and keeps
+Unix metadata-change time checks. There is no timestamp tolerance, retry or
+skipped identity comparison.
+
 ## Fixed ownership
 
 - Customer Desk: per-machine, `ProgramFiles64Folder/OnGROW Support Desk`, one

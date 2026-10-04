@@ -309,6 +309,25 @@ class MsiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "precise filesystem metadata unavailable"):
             msi.metadata_snapshot(types.SimpleNamespace(**missing))
 
+    def test_real_product_builds_package_verified_payload_without_installing(self):
+        root = Path(__file__).resolve().parents[1]
+        for workflow, role, label, sha in (
+            ("ongrow-lab-windows-x64.yml", "customer-desk", "Desk", "GITHUB_SHA"),
+            ("ongrow-support-console-windows-x64.yml", "support-console", "Console", "SOURCE_SHA")):
+            source = (root / ".github/workflows" / workflow).read_text()
+            package = source.split(f"- name: Package verified {label} as native MSI", 1)[1].split("      - name:", 1)[0]
+            self.assertLess(source.index("Unexpected ProductName"), source.index(f"Package verified {label} as native MSI"))
+            self.assertIn("dotnet-version: '8.0.408'", source)
+            self.assertIn("rollForward = 'disable'", package)
+            self.assertIn("RELEASE_SEQUENCE: ${{ github.run_number }}", package)
+            self.assertIn(f"--product {role} --sequence $env:RELEASE_SEQUENCE", package)
+            self.assertIn(f"--source-sha $env:{sha}", package)
+            self.assertIn("Copy-Item LICENCE $source", package)
+            self.assertIn("Copy-Item ongrow-build-provenance.txt $source", package)
+            self.assertIn("Get-FileHash $target -Algorithm SHA256", package)
+            for forbidden in ("--ci-probe", "--emit-only", "msiexec", "Start-Service", "install_ongrow", "secrets."):
+                self.assertNotIn(forbidden, package)
+
     def test_guardian_diagnostic_is_bounded_enum_only_and_phase_aware(self):
         script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")
         diagnostic = script.split("function Get-GuardianDiagnostic(", 1)[1].split("function Throw-GuardianFailure(", 1)[0]
