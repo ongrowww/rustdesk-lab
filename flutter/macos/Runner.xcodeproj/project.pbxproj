@@ -21,6 +21,10 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		0A0210000000000000000001 /* OnGrowUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0210000000000000000002; };
+		0A0210000000000000000003 /* OnGrowUpdatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0210000000000000000004; };
+		0A0210000000000000000005 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 0A0210000000000000000007; };
+		0A0210000000000000000006 /* Sparkle in Embed Libraries */ = {isa = PBXBuildFile; productRef = 0A0210000000000000000007; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		0A0140000000000000000001 /* OnGrowPermissionGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0140000000000000000002 /* OnGrowPermissionGuide.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
@@ -50,6 +54,7 @@
 			dstSubfolderSpec = 10;
 			files = (
 				84010BA9292CF68300152837 /* liblibrustdesk.dylib in Embed Libraries */,
+				0A0210000000000000000006 /* Sparkle in Embed Libraries */,
 			);
 			name = "Embed Libraries";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -57,6 +62,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0A0210000000000000000002 /* OnGrowUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnGrowUpdater.swift; sourceTree = "<group>"; };
+		0A0210000000000000000004 /* OnGrowUpdatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnGrowUpdatePolicy.swift; sourceTree = "<group>"; };
 		26C84465887F29AE938039CB /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		295AD07E63F13855C270A0E0 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		333000ED22D3DE5D00554162 /* Warnings.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Warnings.xcconfig; sourceTree = "<group>"; };
@@ -88,6 +95,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C5E54335B73C89F72DB1B606 /* Pods_Runner.framework in Frameworks */,
+				0A0210000000000000000005 /* Sparkle in Frameworks */,
 				84010BA8292CF66600152837 /* liblibrustdesk.dylib in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -152,6 +160,8 @@
 			isa = PBXGroup;
 			children = (
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
+				0A0210000000000000000002 /* OnGrowUpdater.swift */,
+				0A0210000000000000000004 /* OnGrowUpdatePolicy.swift */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				0A0140000000000000000002 /* OnGrowPermissionGuide.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
@@ -203,6 +213,9 @@
 			);
 			name = Runner;
 			productName = Runner;
+			packageProductDependencies = (
+				0A0210000000000000000007 /* Sparkle */,
+			);
 			productReference = 33CC10ED2044A3C60003C045 /* OnGROW Support Desk.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -243,6 +256,9 @@
 			mainGroup = 33CC10E42044A3C60003C045;
 			productRefGroup = 33CC10EE2044A3C60003C045 /* Products */;
 			projectDirPath = "";
+			packageReferences = (
+				0A0210000000000000000008 /* Sparkle */,
+			);
 			projectRoot = "";
 			targets = (
 				33CC10EC2044A3C60003C045 /* Runner */,
@@ -349,6 +365,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
+				0A0210000000000000000001 /* OnGrowUpdater.swift in Sources */,
+				0A0210000000000000000003 /* OnGrowUpdatePolicy.swift in Sources */,
 				0A0140000000000000000001 /* OnGrowPermissionGuide.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
@@ -689,6 +707,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		0A0210000000000000000008 /* Sparkle */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {kind = revision; revision = eef1a539a373c1f1a320624b1130fc5de7b2e100; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		0A0210000000000000000007 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0A0210000000000000000008;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 33CC10E52044A3C60003C045 /* Project object */;
 }
