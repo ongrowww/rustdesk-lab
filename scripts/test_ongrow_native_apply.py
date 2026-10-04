@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Original native gate tests and a CI-only adapter, without production authority."""
 import argparse
+import gc
 import json
 import os
 from pathlib import Path
@@ -44,10 +45,36 @@ def require_ci(platform):
         raise RuntimeError("explicit disposable native CI runner required")
 
 
+class FixtureDirectory:
+    """Owned disposable fixture with retention that also disables its finalizer."""
+    def __init__(self, **arguments):
+        self.temporary = tempfile.TemporaryDirectory(**arguments)
+        self.name = self.temporary.name
+        self.retained = False
+        self.native_in_flight = False
+
+    def retain(self):
+        self.retained = True
+        self.temporary._finalizer.detach()
+
+    def cleanup(self):
+        if self.native_in_flight:
+            self.retain()
+        if not self.retained:
+            self.temporary.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.cleanup()
+
+
 class ProbeBuild:
     def __enter__(self):
         self.state_directory = None
         self.scratch_directory = None
+        self.native_fixtures = []
         try:
             return self._enter()
         except Exception:
@@ -60,10 +87,10 @@ class ProbeBuild:
         self.state_directory = None
         # Windows validates the real KnownFolder and every ancestor before writing.
         if sys.platform == "win32":
-            self.state_directory = windows_probe_state_directory()
+            self.state_directory = windows_probe_state_directory(create=FixtureDirectory)
         target = ROOT / "target/ongrow-native-apply-probe"
         target.mkdir(parents=True, exist_ok=True)
-        self.scratch_directory = tempfile.TemporaryDirectory(prefix="build-", dir=target)
+        self.scratch_directory = FixtureDirectory(prefix="build-", dir=target)
         self.scratch = Path(self.scratch_directory.name)
         self.state = Path(self.state_directory.name) if self.state_directory else self.scratch / "state"
         if not self.state_directory:
@@ -100,10 +127,20 @@ class ProbeBuild:
                               capture_output=True, encoding="utf-8", errors="strict", timeout=timeout)
 
     def __exit__(self, *_):
+        if any(fixture.native_in_flight or fixture.retained for fixture in self.native_fixtures):
+            self.retain_unknown()
         if self.scratch_directory:
             self.scratch_directory.cleanup()
         if self.state_directory:
             self.state_directory.cleanup()
+
+    def track_native_fixture(self, fixture):
+        self.native_fixtures.append(fixture)
+
+    def retain_unknown(self):
+        for directory in (self.scratch_directory, self.state_directory, *self.native_fixtures):
+            if directory:
+                directory.retain()
 
 
 class ProbeChild:
@@ -178,10 +215,11 @@ class NativeGate:
     """Own fixture root only. No arbitrary installer argv or production root interface."""
     def __init__(self, build):
         self.build = build
-        self.directory = tempfile.TemporaryDirectory(prefix="guardian-", dir=build.state)
+        self.directory = FixtureDirectory(prefix="guardian-", dir=build.state)
         self.root = Path(self.directory.name)
         self.owner = None
         self.mode = None
+        self.native_in_flight = False
         try:
             if self.request("bootstrap") != "Ready":
                 raise RuntimeError("fresh isolated bootstrap failed")
@@ -235,7 +273,22 @@ class NativeGate:
             raise RuntimeError("owner end changed durable gate state")
         return status
 
+    def begin_native(self):
+        self.assert_pending_owner()
+        self.native_in_flight = True
+
+    def assertions_complete(self):
+        # Test lifecycle bookkeeping, not VerifiedHealth or SDK quiescence.
+        self.assert_pending_owner()
+        self.native_in_flight = False
+
+    def retain_unknown(self):
+        self.directory.retain()
+        self.build.retain_unknown()
+
     def close(self):
+        if self.native_in_flight:
+            self.retain_unknown()
         try:
             if self.owner:
                 self.end()
@@ -279,6 +332,19 @@ def windows_guardian(product):
                 elif op == "pending-owner":
                     gate.assert_pending_owner()
                     send("Busy")
+                elif op == "native-starting":
+                    gate.begin_native()
+                    # MSI's original later downgrade/uninstall cases can also
+                    # fail after the guarded phase. Keep this Pending root for
+                    # the entire disposable runner lifetime, including success.
+                    gate.retain_unknown()
+                    send("Busy")
+                elif op == "assertions-complete":
+                    gate.assertions_complete()
+                    send("Busy")
+                elif op == "mutation-unknown":
+                    gate.retain_unknown()
+                    send("Pending")
                 elif op in ("end", "crash"):
                     send(gate.end(crash=op == "crash"))
                 elif op == "close":
@@ -386,6 +452,111 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("1 passed; 0 failed; 0 ignored", result.stdout)
             print("ORDINARY_APP_NO_NATIVE_APPLY_INPUT: PASS")
+
+
+class RetentionTests(unittest.TestCase):
+    def test_guardian_context_exit_and_finalizers_preserve_real_pending_root(self):
+        build = ProbeBuild()
+        paths = []
+        try:
+            with build:
+                gate = NativeGate(build)
+                paths = [Path(build.scratch_directory.name)]
+                if build.state_directory:
+                    paths.append(Path(build.state_directory.name))
+                self.assertEqual(gate.start("transaction"), "Pending")
+                gate.begin_native()
+                gate.close()
+                root = gate.root
+                self.assertTrue(gate.directory.retained)
+            # Actual ProbeBuild context exit and TemporaryDirectory finalizers
+            # have run or are detached, not merely mocked cleanup calls.
+            del gate.directory
+            del build.scratch_directory
+            if build.state_directory:
+                del build.state_directory
+            gc.collect()
+            self.assertTrue(root.is_dir())
+            self.assertEqual(gate.request("admit"), "Pending")
+            self.assertEqual((root / "state-v1.journal").read_bytes(), b"\x01")
+            print("NATIVE_PENDING_ROOT_CONTEXT_RETENTION_PASS")
+        finally:
+            for path in paths:
+                # Retention regression owns these synthetic roots; no installer
+                # or SDK helper was launched. Dispose only after asserting them.
+                if path.exists():
+                    shutil.rmtree(path)
+
+    def test_mac_caller_timeout_decoder_and_pipe_failures_retain_all_owned_roots(self):
+        import test_ongrow_sparkle_probe as sparkle
+        failures = (subprocess.TimeoutExpired("synthetic-caller", 120),
+                    UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic invalid byte"),
+                    BrokenPipeError("synthetic caller pipe"))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                paths = []
+                build = ProbeBuild()
+                task = None
+                try:
+                    with FixtureDirectory(prefix="retention-mac-", dir=ROOT / "target") as fixture, build:
+                        task = Path(fixture.name)
+                        (task / "probe-owned-by-test").write_bytes(b"untouched synthetic probe")
+                        build.track_native_fixture(fixture)
+                        gate = NativeGate(build)
+                        self.assertEqual(gate.start("transaction"), "Pending")
+                        caller = mock.Mock(returncode=None)
+                        caller.poll.side_effect = [None, None, None]
+                        caller.communicate.side_effect = failure
+                        with mock.patch.object(sparkle, "_start_cli", return_value=caller):
+                            with self.assertRaises(type(failure)):
+                                sparkle.native_cli(["synthetic-no-installer"], fixture, gate)
+                        caller.kill.assert_called_once()
+                        caller.wait.assert_called_once_with(timeout=10)
+                        gate.close()
+                        paths = [task, Path(build.scratch_directory.name)]
+                        if build.state_directory:
+                            paths.append(Path(build.state_directory.name))
+                        root = gate.root
+                    del fixture
+                    del gate.directory
+                    del build.scratch_directory
+                    if build.state_directory:
+                        del build.state_directory
+                    gc.collect()
+                    self.assertTrue(task.is_dir())
+                    self.assertEqual((task / "probe-owned-by-test").read_bytes(), b"untouched synthetic probe")
+                    self.assertEqual(gate.request("admit"), "Pending")
+                    self.assertTrue(root.is_dir())
+                finally:
+                    for path in paths:
+                        if path.exists():
+                            shutil.rmtree(path)
+        # The six original, unguarded native SDK cases use the same caller
+        # helper and retain the whole fixture even without a Transaction.
+        paths = []
+        build = ProbeBuild()
+        try:
+            with FixtureDirectory(prefix="retention-original-", dir=ROOT / "target") as fixture, build:
+                build.track_native_fixture(fixture)
+                task = Path(fixture.name)
+                paths = [task, Path(build.scratch_directory.name)]
+                if build.state_directory:
+                    paths.append(Path(build.state_directory.name))
+                caller = mock.Mock(returncode=None)
+                caller.poll.return_value = None
+                caller.communicate.side_effect = BrokenPipeError("synthetic legacy caller pipe")
+                with mock.patch.object(sparkle, "_start_cli", return_value=caller):
+                    with self.assertRaises(BrokenPipeError):
+                        sparkle.native_cli(["synthetic-no-installer"], fixture)
+            del fixture
+            gc.collect()
+            self.assertTrue(task.is_dir())
+            self.assertTrue(paths[1].is_dir())
+            print("MAC_ALL_FIXTURE_TIMEOUT_DECODER_PIPE_RETENTION_PASS")
+        finally:
+            for path in paths:
+                if path.exists():
+                    shutil.rmtree(path)
 
 
 if __name__ == "__main__":

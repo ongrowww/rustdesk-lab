@@ -13,7 +13,7 @@ import threading
 import unittest
 import uuid
 from pathlib import Path
-from test_ongrow_native_apply import NativeGate, ProbeBuild
+from test_ongrow_native_apply import FixtureDirectory, NativeGate, ProbeBuild
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_sparkle_probe"
@@ -94,7 +94,40 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def guarded_install(build, case, command, host, original_hash, next_hash, sentinel):
+def _start_cli(command):
+    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            encoding="utf-8", errors="strict")
+
+
+def native_cli(command, fixture, gate=None):
+    """Retain every owned mutatable root on any unknown post-start caller failure."""
+    if gate:
+        gate.begin_native()
+    fixture.native_in_flight = True
+    process = None
+    try:
+        process = _start_cli(command)
+        if gate:
+            if process.poll() is not None:
+                raise RuntimeError("SDK caller exited before concurrent native admission probe")
+            gate.assert_pending_owner()
+            if process.poll() is not None:
+                raise RuntimeError("SDK caller ended before concurrent admission assertion")
+        stdout, stderr = process.communicate(timeout=120)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except Exception:
+        fixture.retain()
+        if gate:
+            gate.retain_unknown()
+        # Bound only the test-owned CLI caller. Never enumerate or kill SDK
+        # helpers; their mutation/quiescence remains unknown.
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+        raise
+
+
+def guarded_install(build, case, command, host, original_hash, next_hash, sentinel, fixture):
     gate = NativeGate(build)
     def installed(expected, digest):
         info = plistlib.loads((host / "Contents/Info.plist").read_bytes())
@@ -122,35 +155,22 @@ def guarded_install(build, case, command, host, original_hash, next_hash, sentin
         if gate.end() != "Ready" or gate.start("transaction") != "Pending":
             raise RuntimeError("session end or actual Transaction start failed")
         gate.assert_pending_owner()
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   encoding="utf-8", errors="strict")
-        concurrent_error = None
-        try:
-            if process.poll() is not None:
-                raise RuntimeError("SDK caller exited before concurrent native admission probe")
-            gate.assert_pending_owner()
-            if process.poll() is not None:
-                raise RuntimeError("SDK caller ended before concurrent admission assertion")
-        except Exception as error:
-            concurrent_error = error
-        try:
-            stdout, stderr = process.communicate(timeout=120)
-        except subprocess.TimeoutExpired:
-            # Bound only our own CLI caller. Sparkle helpers may outlive it.
-            # No callback, kill or exit is interpreted as installer quiescence.
-            process.kill()
-            process.communicate(timeout=10)
-            raise RuntimeError("SDK caller deadline exceeded; Pending preserved, helper state unknown")
-        if concurrent_error:
-            raise concurrent_error
-        if process.returncode != 0:
-            raise RuntimeError(f"guarded SDK installation exit={process.returncode}: {stderr[-3000:]}")
+        result = native_cli(command, fixture, gate)
+        if result.returncode != 0:
+            raise RuntimeError(f"guarded SDK installation exit={result.returncode}: {result.stderr[-3000:]}")
         gate.assert_pending_owner()
         installed("2", next_hash)
         gate.assert_pending_owner()
+        gate.assertions_complete()
         if gate.end() != "Pending" or gate.request("admit") != "Pending":
             raise RuntimeError("installed bytes cannot clear Pending or admit a session")
         print("Sparkle guarded-success: actual bundle=2, explicit marker=2, sentinel preserved, Pending retained")
+        fixture.native_in_flight = False
+    except Exception:
+        if fixture.native_in_flight:
+            fixture.retain()
+            gate.retain_unknown()
+        raise
     finally:
         gate.close()
 
@@ -164,8 +184,9 @@ def integration(distribution, cli_app):
     if cli_app.resolve(strict=True) != expected_cli_app.resolve(strict=True):
         raise RuntimeError("CLI application is not the explicitly built runner output")
     validate_cli_app(cli_app)
-    with tempfile.TemporaryDirectory(prefix="ongrow-sparkle-probe-", dir=os.environ["RUNNER_TEMP"]) as directory, ProbeBuild() as gate_build:
-        task = Path(directory)
+    with FixtureDirectory(prefix="ongrow-sparkle-probe-", dir=os.environ["RUNNER_TEMP"]) as fixture, ProbeBuild() as gate_build:
+        gate_build.track_native_fixture(fixture)
+        task = Path(fixture.name)
         task.chmod(0o700)
         run("xcrun", "swiftc", "-parse-as-library", FIXTURE / "keys.swift", "-o", task / "keys")
         run(task / "keys", task / "private.key", task / "public.key")
@@ -241,12 +262,9 @@ def integration(distribution, cli_app):
                 command = [str(cli), str(host), "--check-immediately", "--feed-url",
                            f"{origin}/appcast.xml", "--user-agent-name", "OnGROW isolated CI probe"]
                 if case in ("guarded-success", "guardian-crash-before-start"):
-                    guarded_install(gate_build, case, command, host, original_hash, next_hash, sentinel)
+                    guarded_install(gate_build, case, command, host, original_hash, next_hash, sentinel, fixture)
                     continue
-                result = subprocess.run([str(cli), str(host), "--check-immediately",
-                    "--feed-url", f"{origin}/appcast.xml", "--user-agent-name", "OnGROW isolated CI probe"],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    encoding="utf-8", errors="strict", timeout=120)
+                result = native_cli(command, fixture)
                 info = plistlib.loads((host / "Contents/Info.plist").read_bytes())
                 expected = "2" if case == "success" else "1"
                 if info["CFBundleVersion"] != expected or sentinel.read_bytes() != b"customer-config-must-survive":
@@ -263,6 +281,7 @@ def integration(distribution, cli_app):
                 if case not in ("success", "older-version") and result.returncode == 0:
                     raise RuntimeError(f"{case}: rejection unexpectedly reported success")
                 print(f"Sparkle {case}: actual bundle={expected}, marker={marker}, sentinel preserved, exit={result.returncode}")
+                fixture.native_in_flight = False
             print("NATIVE_MACOS_GUARDED_APPLY_PASS")
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=10)

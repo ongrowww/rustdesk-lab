@@ -58,6 +58,21 @@ that SDK helpers have stopped or that installation is quiescent. Neither SDK
 cycle completion nor a new file hash can clear Pending. Fixture disposal on a
 throwaway runner is not production recovery.
 
+Unknown post-start caller, pipe, decoder or deadline failures retain the entire
+owned Mac fixture and every gate/build/state root until the disposable runner
+ends. Retention disables TemporaryDirectory finalizers as well as explicit
+cleanup. This applies to the original six native SDK cases too. Windows marks
+native start before msiexec launch and retains its Pending probe roots for the
+whole runner lifetime, even on success, so later downgrade/uninstall failures
+cannot lose them. A timed-out msiexec triggers no cleanup MSI.
+Retention flags only control fixture disposal; they grant no admission, package,
+Ready, health or installer-quiescence authority.
+
+Local regressions exercise actual Transaction owners, context exit and garbage
+collection, then verify retained roots and actual Pending admission. Synthetic
+caller timeout/UTF-8 decoder/pipe failures cover the whole Mac fixture without
+launching any native installer. These are retention tests, not installation proof.
+
 Local verification runs at least eight substantive native tests twice, plus
 the real Python pipe adapter, missing input and ordinary app import. The
 existing Pending/store/runtime/session/profile/isolation/signature gates stay

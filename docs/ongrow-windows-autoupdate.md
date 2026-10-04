@@ -22,6 +22,10 @@ uninstall and shared-directory tests. No installed file hash, service sentinel
 or msiexec exit is VerifiedHealth. This drill does not activate a production
 updater, clear Pending, advance accepted sequence or prove SYSTEM/cross-principal
 coordination.
+CI keeps the guarded Pending roots through disposable runner teardown, even
+after successful assertions. Native start is marked before launching msiexec.
+A timeout or lost controller cannot remove those roots, and an in-flight MSI
+prevents cleanup MSI commands. No native transaction is killed.
 
 This package layer does not enable automatic downloads or installation. The trusted
 runtime scheduler, signed staging, session coordination, health recovery and the

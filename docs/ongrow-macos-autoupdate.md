@@ -105,6 +105,10 @@ claim an installer-after-caller-crash or quiescence proof. The explicit marker
 execution is manual test instrumentation, never an SDK relaunch or VerifiedHealth.
 SDK callbacks, caller exit and new bytes cannot authorize Ready. The existing
 six replacement/signature/version cases remain.
+Any caller deadline, decoder or pipe failure after SDK start preserves the whole
+owned bundle/feed/sentinel fixture plus gate/build/state roots through runner
+teardown. Explicit cleanup and temporary-directory finalizers respect that
+retention. The original six cases use the same bounded caller adapter.
 
 Local checks:
 

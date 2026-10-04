@@ -143,6 +143,10 @@ function Invoke-Msi([string]$Verb, [string]$Target, [string]$Label, [int]$Expect
     if ($Verb -notin @('/i','/x')) { throw 'Unexpected MSI operation' }
     $log = Join-Path $root "$Label.log"
     $args = @($Verb, "`"$Target`"", '/qn', '/norestart', '/L*v', "`"$log`"") + $Properties
+    if ($null -ne $Guardian) {
+        $Guardian.NativeStarted = $true
+        Assert-Guardian $Guardian 'native-starting' 'Busy'
+    }
     $p = Start-Process -FilePath (Join-Path $env:WINDIR 'System32/msiexec.exe') -ArgumentList $args -PassThru
     $script:NativeMsiInFlight = $true
     $gateError = $null
@@ -186,7 +190,7 @@ function Start-Guardian([string]$Product) {
     $start.RedirectStandardError = $true
     foreach ($argument in @((Join-Path $PSScriptRoot 'test_ongrow_native_apply.py'), '--ci-windows-guardian', $Product)) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
-    $guardian = [PSCustomObject]@{ Process = $process; Errors = $process.StandardError.ReadToEndAsync() }
+    $guardian = [PSCustomObject]@{ Process = $process; Errors = $process.StandardError.ReadToEndAsync(); NativeStarted = $false }
     try {
         if ((Read-Guardian $guardian) -ne 'Ready') { throw 'Fresh guardian bootstrap failed' }
     } catch {
@@ -301,6 +305,8 @@ foreach ($product in @('customer-desk','support-console')) {
         Invoke-Msi -Verb '/i' -Target $packages[2] -Label "$product-upgrade-v2" -Guardian $guardian
         Assert-ProbeVersion 2
         Assert-Guardian $guardian 'pending-owner' 'Busy'
+        Assert-Guardian $guardian 'assertions-complete' 'Busy'
+        $guardian.NativeStarted = $false
         # Crash the actual Rust Transaction owner, not msiexec or the service.
         Assert-Guardian $guardian 'crash' 'Pending'
         Assert-Guardian $guardian 'admit' 'Pending'
@@ -311,6 +317,8 @@ foreach ($product in @('customer-desk','support-console')) {
         Invoke-Msi -Verb '/i' -Target $packages[3] -Label "$product-fail-v3" -Expected 1603 -Properties @('PROBE_FAIL=1') -Guardian $guardian
         Assert-ProbeVersion 2
         Assert-Guardian $guardian 'pending-owner' 'Busy'
+        Assert-Guardian $guardian 'assertions-complete' 'Busy'
+        $guardian.NativeStarted = $false
         Assert-Guardian $guardian 'end' 'Pending'
         $guardianEnded = $true
         Assert-Guardian $guardian 'admit' 'Pending'
@@ -328,6 +336,7 @@ foreach ($product in @('customer-desk','support-console')) {
         if ($null -ne $guardian) {
             # Only own bounded gate children; never kill a native MSI transaction.
             try {
+                if ($guardian.NativeStarted -or $script:NativeMsiInFlight) { Assert-Guardian $guardian 'mutation-unknown' 'Pending' }
                 if (-not $guardianEnded) { Assert-Guardian $guardian 'end' 'Pending' }
                 Close-Guardian $guardian
             } catch {
