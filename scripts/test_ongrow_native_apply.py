@@ -337,9 +337,13 @@ class NativeTests(unittest.TestCase):
                 self.assertIn(PREFIX + name + ": test", listing.stdout)
             for serial in (False, True):
                 environment = build.environment.copy()
+                arguments = [PREFIX, "--", "--nocapture"]
                 if serial:
                     environment["RUST_TEST_THREADS"] = "1"
-                result = build.run([PREFIX, "--", "--test-threads=1", "--nocapture"], environment)
+                    arguments.append("--test-threads=1")
+                else:
+                    environment.pop("RUST_TEST_THREADS", None)
+                result = build.run(arguments, environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("9 passed; 0 failed; 0 ignored", result.stdout)
                 self.assertIn("NATIVE_APPLY_GATE_PASS", result.stdout)
