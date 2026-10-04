@@ -657,7 +657,8 @@ class GuardianDiagnosticTests(unittest.TestCase):
                         if value.startswith("ONGROW_GUARDIAN_FAILURE"):
                             roots = list(build.state.glob("guardian-*"))
                             self.assertEqual(len(roots), 1)
-                            self.assertEqual((roots[0] / "state-v1.journal").read_bytes(), b"\x01")
+                            gate_root = roots[0] / "gate" if sys.platform == "win32" else roots[0]
+                            self.assertEqual((gate_root / "state-v1.journal").read_bytes(), b"\x01")
                             marked_roots.extend(roots)
                         return super().write(value)
                 output, status = ObservedStderr(), io.StringIO()
