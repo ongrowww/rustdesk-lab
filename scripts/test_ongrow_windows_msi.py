@@ -287,8 +287,27 @@ class MsiTests(unittest.TestCase):
     def test_metadata_diagnostics_expose_only_field_names(self):
         expected = (101, 202, 3, 404, 505)
         actual = (909, 202, 8, 404, 606)
-        self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size,st_ctime_ns")
+        self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size," + msi.SNAPSHOT_FIELDS[-1])
         self.assertEqual(msi.differing_fields(expected, expected), "")
+
+    def test_precise_snapshot_has_same_semantics_for_path_and_handle(self):
+        path = self.source / "LICENCE"
+        # Rewrite once before validation. On affected CPython Windows builds
+        # this makes path ctime (creation) differ from handle ctime (change).
+        path.write_bytes(b"updated fixture")
+        expected = msi.snapshot(path)
+        with path.open("rb") as stream:
+            self.assertEqual(msi.metadata_snapshot(os.fstat(stream.fileno())), expected)
+        self.assertEqual(msi.SNAPSHOT_FIELDS[-1], "st_birthtime_ns" if os.name == "nt" else "st_ctime_ns")
+        values = dict(zip(msi.SNAPSHOT_FIELDS, expected))
+        for field in msi.SNAPSHOT_FIELDS:
+            changed = {**values, field: values[field] + 1}
+            actual = msi.metadata_snapshot(types.SimpleNamespace(**changed))
+            self.assertNotEqual(actual, expected)
+            self.assertEqual(msi.differing_fields(expected, actual), field)
+        missing = {name: value for name, value in values.items() if name != msi.SNAPSHOT_FIELDS[-1]}
+        with self.assertRaisesRegex(ValueError, "precise filesystem metadata unavailable"):
+            msi.metadata_snapshot(types.SimpleNamespace(**missing))
 
     def test_guardian_diagnostic_is_bounded_enum_only_and_phase_aware(self):
         script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")

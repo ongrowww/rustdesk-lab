@@ -36,13 +36,10 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Verify locked macOS update integration
+      - name: Verify portable macOS update source checks
         run: |
           python3 scripts/test_ongrow_macos_update_profile.py
           python3 scripts/test_ongrow_sparkle_probe.py
-          xcrun swiftc flutter/macos/Runner/OnGrowUpdatePolicy.swift scripts/test_ongrow_macos_update_policy.swift -o "$RUNNER_TEMP/update-policy-test"
-          "$RUNNER_TEMP/update-policy-test"
-          plutil -lint flutter/macos/Runner.xcodeproj/project.pbxproj
 
       - name: Validate and apply OnGROW product profile
         shell: bash
@@ -190,6 +187,14 @@ jobs:
             scripts/test_ongrow_permission_guide.swift \
             -o "$RUNNER_TEMP/permission-guide-test"
           "$RUNNER_TEMP/permission-guide-test"
+
+      - name: Verify locked macOS update integration
+        run: |
+          python3 scripts/test_ongrow_macos_update_profile.py
+          python3 scripts/test_ongrow_sparkle_probe.py
+          xcrun swiftc flutter/macos/Runner/OnGrowUpdatePolicy.swift scripts/test_ongrow_macos_update_policy.swift -o "$RUNNER_TEMP/update-policy-test"
+          "$RUNNER_TEMP/update-policy-test"
+          plutil -lint flutter/macos/Runner.xcodeproj/project.pbxproj
 
       - name: Validate and apply OnGROW product profile
         shell: bash

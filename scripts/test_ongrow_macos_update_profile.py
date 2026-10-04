@@ -92,6 +92,19 @@ class ProfileTests(unittest.TestCase):
         for source in ("OnGrowUpdater.swift", "OnGrowUpdatePolicy.swift"):
             self.assertIn(f"{source} in Sources", project)
 
+    def test_apple_tools_run_only_on_apple_runners_before_build(self):
+        for role in ("lab", "support-console"):
+            workflow = (ROOT / f".github/workflows/ongrow-{role}-macos-arm64.yml").read_text()
+            bridge, native = workflow.split("  build-macos-arm64:", 1)
+            self.assertIn("runs-on: ubuntu-22.04", bridge)
+            self.assertNotIn("xcrun", bridge)
+            self.assertNotIn("plutil", bridge)
+            self.assertIn("runs-on: macos-14", native)
+            verification = native.index("- name: Verify locked macOS update integration")
+            self.assertLess(verification, native.index("- name: Build RustDesk"))
+            self.assertIn("xcrun swiftc", native[verification:])
+            self.assertIn("plutil -lint", native[verification:])
+
     def test_release_counter_boundaries(self):
         previous = None
         for counter in (1, 99, 100, 9999, 10000, 99_989_999):
