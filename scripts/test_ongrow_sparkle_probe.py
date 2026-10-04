@@ -218,6 +218,14 @@ def integration(distribution, cli_app):
         run("xcrun", "swiftc", "-typecheck", "-F", distribution,
             ROOT / "flutter/macos/Runner/OnGrowUpdatePolicy.swift",
             ROOT / "flutter/macos/Runner/OnGrowUpdater.swift")
+        # Instantiate the real production delegate, without starting its
+        # controller, and verify its Objective-C callbacks are actually exposed.
+        run("xcrun", "swiftc", "-D", "ONGROW_SPARKLE_DELEGATE_PROBE", "-F", distribution,
+            "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", distribution,
+            ROOT / "flutter/macos/Runner/OnGrowUpdatePolicy.swift",
+            ROOT / "flutter/macos/Runner/OnGrowUpdater.swift",
+            ROOT / "scripts/test_ongrow_macos_update_policy.swift", "-o", task / "policy-delegate-test")
+        run(task / "policy-delegate-test")
         web = task / "web"; web.mkdir()
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
             functools.partial(QuietHandler, directory=str(web)))
@@ -358,7 +366,17 @@ class FixtureTests(unittest.TestCase):
         code = (ROOT / "flutter/macos/Runner/OnGrowUpdater.swift").read_text()
         self.assertIn("let sessionBarrierReady = false", code)
         self.assertIn("startingUpdater: false", code)
-        self.assertIn("guard OnGrowUpdatePolicy.mayStart", code)
+        self.assertIn("guard mayStart() else", code)
+        self.assertIn("return OnGrowUpdatePolicy.mayStart", code)
+        self.assertIn("mayPerform updateCheck: SPUUpdateCheck", code)
+        self.assertIn("shouldProceedWithUpdate item: SUAppcastItem", code)
+        self.assertIn("item.signingValidationStatus == .succeeded", code)
+        self.assertIn("item.fileURL?.absoluteString", code)
+        self.assertIn("item.deltaUpdates?.values.map", code)
+        self.assertIn("OnGrowUpdatePolicy.mayProceed", code)
+        self.assertIn("appcast.items.allSatisfy", code)
+        self.assertIn("freshAppcastPermitted = false", code)
+        self.assertIn("freshAppcastPermitted, permitted(item)", code)
         self.assertNotIn("UserDefaults", code)
 
     def test_pinned_workflow_is_isolated(self):
