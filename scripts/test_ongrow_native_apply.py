@@ -74,6 +74,9 @@ class FixtureDirectory:
 
 
 class ProbeBuild:
+    def __init__(self, windows_diagnostics=False):
+        self.windows_diagnostics = windows_diagnostics
+
     def __enter__(self):
         self.state_directory = None
         self.scratch_directory = None
@@ -85,6 +88,8 @@ class ProbeBuild:
             raise
 
     def _enter(self):
+        if self.windows_diagnostics:
+            require_ci("win32")
         if sys.platform not in ("darwin", "win32"):
             raise RuntimeError("native host required, never skip")
         self.state_directory = None
@@ -102,6 +107,8 @@ class ProbeBuild:
         self.environment.update(RUSTFLAGS=CHECK_CFG + " --cfg ongrow_native_apply_probe",
                                 CARGO_TARGET_DIR=str(target / "build"),
                                 ONGROW_NATIVE_APPLY_TEST_ROOT=str(self.state.resolve()))
+        if self.windows_diagnostics:
+            self.environment["RUSTFLAGS"] += " --cfg ongrow_session_gate_probe"
         version = subprocess.run(["rustc", "--version"], env=self.environment, capture_output=True,
                                  encoding="utf-8", errors="strict", timeout=10, check=True)
         if not version.stdout.startswith("rustc 1.81.0 "):
@@ -214,6 +221,47 @@ class ProbeChild:
                 raise RuntimeError("bounded gate reader exit failed")
 
 
+BOOTSTRAP_FIELDS = {
+    "gate": ("Ready", "Pending", "Busy", "MissingGate", "Untrusted", "Io", "Disabled", "unknown"),
+    "reject": ("token-open", "token-size", "token-user", "attributes-read", "attributes-or-hardlinks",
+               "security-descriptor", "owner-trust", "owner-exact-user", "acl-information",
+               "acl-entry-read", "acl-entry-null", "acl-entry-type-or-size", "forbidden-access",
+               "directory-open", "file-create", "file-open", "root-prefix", "root-drive-prefix",
+               "root-drive-type", "directory-component", "directory-empty", "bootstrap-state-already-present", "unknown"),
+    "context": ("root-volume", "protected-root", "direct-parent", "outer-ancestor", "journal-bootstrap", "gate-bootstrap", "unknown"),
+    "owner": ("system", "admins", "builtin-users", "everyone", "creator-owner", "local-service", "network-service",
+              "authenticated-users", "owner-rights", "builtin-guests", "builtin-power-users", "builtin-backup-operators",
+              "builtin-remote-desktop-users", "builtin-remote-management-users", "current-user", "all-services",
+              "trusted-installer", "windows-account-form", "other", "unknown"),
+}
+BOOTSTRAP_FIELDS["access"] = BOOTSTRAP_FIELDS["owner"]
+BOOTSTRAP_OS_MARKERS = {"reject": "REJECT", "context": "REJECT_CONTEXT", "owner": "OWNER", "access": "ACCESS_PRINCIPAL"}
+
+
+def bootstrap_field(field, value):
+    return value if type(value) is str and value in BOOTSTRAP_FIELDS[field] else "unknown"
+
+
+def extract_bootstrap_diagnostic(status, output):
+    result = {field: "unknown" for field in BOOTSTRAP_FIELDS}
+    result["gate"] = bootstrap_field("gate", status)
+    if (not isinstance(output, list) or any(type(line) is not str for line in output) or
+            sum(len(line.encode("utf-8")) for line in output) > 8192):
+        return result
+    for field, marker in BOOTSTRAP_OS_MARKERS.items():
+        matches = [match.group(1) for line in output
+                   if (match := re.fullmatch("ONGROW_GATE_" + marker + r":([^\r\n]*)\r?\n?", line))]
+        if len(matches) == 1:
+            result[field] = bootstrap_field(field, matches[0])
+    return result
+
+
+class BootstrapFailure(RuntimeError):
+    def __init__(self, diagnostic):
+        super().__init__("fresh isolated bootstrap failed")
+        self.diagnostic = diagnostic
+
+
 class NativeGate:
     """Own fixture root only. No arbitrary installer argv or production root interface."""
     def __init__(self, build):
@@ -225,7 +273,7 @@ class NativeGate:
         self.native_in_flight = False
         try:
             if self.request("bootstrap") != "Ready":
-                raise RuntimeError("fresh isolated bootstrap failed")
+                raise BootstrapFailure(self.bootstrap_diagnostic)
         except Exception:
             self.directory.cleanup()
             raise
@@ -234,6 +282,8 @@ class NativeGate:
         child = ProbeChild(self.build, self.root, action)
         status = child.status
         child.close()
+        if action == "bootstrap":
+            self.bootstrap_diagnostic = extract_bootstrap_diagnostic(status, child.output)
         return status
 
     def start(self, mode):
@@ -361,7 +411,12 @@ def report_guardian_failure(phase, error):
         kind, category = "io", "io"
     elif isinstance(error, subprocess.CalledProcessError):
         kind, category = "process", "process"
-    print(f"ONGROW_GUARDIAN_FAILURE phase={phase} kind={kind} category={category}",
+    suffix = ""
+    if phase == "bootstrap" and isinstance(error, BootstrapFailure):
+        diagnostic = error.diagnostic if type(error.diagnostic) is dict else {}
+        suffix = "".join(" " + field + "=" + bootstrap_field(field, diagnostic.get(field))
+                         for field in BOOTSTRAP_FIELDS)
+    print(f"ONGROW_GUARDIAN_FAILURE phase={phase} kind={kind} category={category}" + suffix,
           file=sys.stderr, flush=True)
 
 
@@ -371,7 +426,7 @@ def windows_guardian(product):
         require_ci("win32")
         if product not in ("customer-desk", "support-console"):
             raise RuntimeError("separately identified MSI probe product required")
-        with ProbeBuild() as build:
+        with ProbeBuild(windows_diagnostics=True) as build:
             phase = "bootstrap"
             gate = NativeGate(build)
             messages = queue.Queue(maxsize=1)
@@ -627,6 +682,8 @@ source = Path(path).read_text(encoding="utf-8", errors="strict")
 namespace = {"__name__": "guardian_cli_failure_test", "__file__": path}
 exec(compile(source, path, "exec"), namespace)
 class FailingBuild:
+    def __init__(self, windows_diagnostics=False):
+        assert windows_diagnostics is True
     def __enter__(self):
         raise RuntimeError("/synthetic/private-path token=SYNTHETIC_TOKEN_SENTINEL")
     def __exit__(self, *arguments):
@@ -650,6 +707,129 @@ exec(compile(main, path, "exec"), namespace)
         self.assertNotIn("SYNTHETIC_TOKEN_SENTINEL", result.stderr)
         self.assertNotIn("/synthetic/private-path", result.stderr)
         print("GUARDIAN_ACTUAL_CLI_EXIT_ONE_NO_TRACEBACK_PASS")
+
+
+class BootstrapDiagnosticTests(unittest.TestCase):
+    def test_actual_extractor_formatter_enums_privacy_conflicts_and_longest(self):
+        sentinel = "/synthetic/path token=SYNTHETIC_BOOTSTRAP_SENTINEL"
+        markers = ["ONGROW_GATE_REJECT:owner-trust\n", "ONGROW_GATE_REJECT_CONTEXT:journal-bootstrap\n",
+                   "ONGROW_GATE_OWNER:admins\n", "ONGROW_GATE_ACCESS_PRINCIPAL:current-user\n",
+                   "ONGROW_GATE_ACCESS_RIGHT:" + sentinel + "\n"]
+        def formatted(diagnostic):
+            output = io.StringIO()
+            with contextlib.redirect_stderr(output):
+                report_guardian_failure("bootstrap", BootstrapFailure(diagnostic))
+            self.assertNotIn(sentinel, output.getvalue())
+            self.assertLessEqual(len(output.getvalue()), 256)
+            return output.getvalue()
+        for status in BOOTSTRAP_FIELDS["gate"]:
+            diagnostic = extract_bootstrap_diagnostic(status, markers)
+            self.assertEqual(diagnostic, dict(gate=status, reject="owner-trust", context="journal-bootstrap", owner="admins", access="current-user"))
+            self.assertIn(" gate=" + status + " reject=owner-trust", formatted(diagnostic))
+        for field, marker in BOOTSTRAP_OS_MARKERS.items():
+            for value in BOOTSTRAP_FIELDS[field]:
+                self.assertEqual(extract_bootstrap_diagnostic("Untrusted", ["ONGROW_GATE_" + marker + ":" + value + "\n"])[field], value)
+            for lines in (["ONGROW_GATE_" + marker + ":" + sentinel + "\n"],
+                          [sentinel + " ONGROW_GATE_" + marker + ":admins\n"],
+                          ["ONGROW_GATE_" + marker + ":admins " + sentinel + "\n"],
+                          ["ONGROW_GATE_" + marker + ":" + BOOTSTRAP_FIELDS[field][0] + "\n",
+                           "ONGROW_GATE_" + marker + ":" + BOOTSTRAP_FIELDS[field][1] + "\n"],
+                          ["ONGROW_GATE_" + marker + ":" + BOOTSTRAP_FIELDS[field][0] + "\n"] * 2, []):
+                self.assertEqual(extract_bootstrap_diagnostic("Untrusted", lines)[field], "unknown")
+                formatted(extract_bootstrap_diagnostic("Untrusted", lines))
+        absent = extract_bootstrap_diagnostic(sentinel, [])
+        self.assertEqual(set(absent.values()), {"unknown"})
+        self.assertEqual(set(extract_bootstrap_diagnostic(sentinel, ["x" * 8193]).values()), {"unknown"})
+        # Tampered exception fields are validated again, not trusted as typed data.
+        forged = {field: sentinel for field in BOOTSTRAP_FIELDS}
+        self.assertTrue(formatted(forged).endswith(" gate=unknown reject=unknown context=unknown owner=unknown access=unknown\n"))
+        longest = formatted({field: max(values, key=len) for field, values in BOOTSTRAP_FIELDS.items()})
+        self.assertEqual(len(longest), 238)
+        print("BOOTSTRAP_ENUM_PRIVACY_CONFLICT_LONGEST_238_PASS")
+
+    def test_actual_bootstrap_closes_child_before_extract_and_cleans_fixture(self):
+        with ProbeBuild() as build:
+            for status in ("Untrusted", "MissingGate", "Io"):
+                events, roots = [], []
+                test = self
+                class ChildOSBoundary:
+                    def __init__(child, actual_build, root, action):
+                        test.assertIs(actual_build, build)
+                        test.assertEqual(action, "bootstrap")
+                        child.status, child.root, child.joined = status, root, False
+                        roots.append(root)
+                    def close(child):
+                        events.append("normal-close-and-reader-join")
+                        child.joined = True
+                    @property
+                    def output(child):
+                        test.assertTrue(child.joined)
+                        test.assertTrue(child.root.is_dir())
+                        events.append("extract")
+                        return ["ONGROW_GATE_REJECT:owner-exact-user\n", "ONGROW_GATE_REJECT_CONTEXT:protected-root\n"]
+                with mock.patch(__name__ + ".ProbeChild", ChildOSBoundary):
+                    with self.assertRaises(BootstrapFailure) as failure:
+                        NativeGate(build)
+                self.assertEqual(events, ["normal-close-and-reader-join", "extract"])
+                self.assertEqual(failure.exception.diagnostic["gate"], status)
+                self.assertEqual(failure.exception.diagnostic["reject"], "owner-exact-user")
+                self.assertFalse(roots[0].exists())
+                self.assertEqual(str(failure.exception), "fresh isolated bootstrap failed")
+        print("ACTUAL_BOOTSTRAP_CLOSE_EXTRACT_INTERNAL_CLEANUP_PASS")
+
+    def test_actual_build_and_controller_isolate_windows_diagnostic_cfg(self):
+        target = ROOT / "target/ongrow-native-apply-probe"
+        target.mkdir(parents=True, exist_ok=True)
+        calls = []
+        def process(command, **arguments):
+            calls.append((command, arguments["env"]["RUSTFLAGS"]))
+            stdout = "rustc 1.81.0 synthetic\n" if command[0] == "rustc" else json.dumps(
+                {"reason": "compiler-artifact", "executable": "synthetic-unused-binary"}) + "\n"
+            return subprocess.CompletedProcess(command, 0, stdout, "")
+        def state_directory(create):
+            return create(prefix="cfg-state-", dir=target)
+        for platform, diagnostics in (("darwin", False), ("win32", False), ("win32", True)):
+            with mock.patch.object(sys, "platform", platform), \
+                    mock.patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_OS="Windows"), \
+                    mock.patch(__name__ + ".windows_probe_state_directory", side_effect=state_directory), \
+                    mock.patch.object(subprocess, "run", side_effect=process):
+                with ProbeBuild(windows_diagnostics=diagnostics) as build:
+                    self.assertEqual(build.environment["RUSTFLAGS"], CHECK_CFG + " --cfg ongrow_native_apply_probe" +
+                                     (" --cfg ongrow_session_gate_probe" if diagnostics else ""))
+        class ChildOSBoundary:
+            status, output = "Ready", []
+            def __init__(child, build, root, action):
+                self.assertEqual(action, "bootstrap")
+                self.assertTrue(build.windows_diagnostics)
+            def close(child):
+                pass
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_OS="Windows"), \
+                mock.patch(__name__ + ".windows_probe_state_directory", side_effect=state_directory), \
+                mock.patch.object(subprocess, "run", side_effect=process), \
+                mock.patch(__name__ + ".ProbeChild", ChildOSBoundary), \
+                mock.patch.object(sys, "stdin", io.StringIO('{"op":"close"}\n')), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            windows_guardian("customer-desk")
+        self.assertEqual(output.getvalue(), '{"status": "Ready"}\n{"status": "Closed"}\n')
+        cargo_flags = [flags for command, flags in calls if command[0] == "cargo"]
+        self.assertEqual(cargo_flags, [CHECK_CFG + " --cfg ongrow_native_apply_probe"] * 2 +
+                         [CHECK_CFG + " --cfg ongrow_native_apply_probe --cfg ongrow_session_gate_probe"] * 2)
+        for command, _ in calls:
+            if command[0] == "cargo":
+                self.assertIn("--no-run", command)
+        # A refused diagnostic build must not reach root creation or compilation.
+        with mock.patch.dict(os.environ, GITHUB_ACTIONS="false"), \
+                mock.patch.object(subprocess, "run") as forbidden:
+            with self.assertRaisesRegex(RuntimeError, "explicit disposable native CI runner required"):
+                with ProbeBuild(windows_diagnostics=True):
+                    self.fail("unauthorized build entered")
+            forbidden.assert_not_called()
+        native = text(Path(__file__))
+        self.assertLess(native.index('require_ci("win32")', native.index("def windows_guardian(product):")),
+                        native.index("with ProbeBuild(windows_diagnostics=True)", native.index("def windows_guardian(product):")))
+        self.assertIn('[str(build.binary), "--exact", PREFIX + "native_child", "--nocapture"]', native)
+        print("ACTUAL_BUILD_CONTROLLER_DIAGNOSTIC_CFG_ISOLATION_PASS")
 
 
 class NativeTests(unittest.TestCase):

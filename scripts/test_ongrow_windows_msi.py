@@ -2,6 +2,7 @@
 """Portable validation/XML tests. These are not native MSI lifecycle tests."""
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -295,7 +296,7 @@ class MsiTests(unittest.TestCase):
         self.assertLess(diagnostic.index("if (-not $Guardian.Process.HasExited)"), diagnostic.index("$Guardian.Errors.Wait(1000)"))
         self.assertIn("$diagnostic.Length -le 256", diagnostic)
         self.assertIn("$diagnostic -cmatch $pattern", diagnostic)
-        self.assertIn("\\AONGROW_GUARDIAN_FAILURE phase=", diagnostic)
+        self.assertIn("\\A(?:ONGROW_GUARDIAN_FAILURE phase=", diagnostic)
         self.assertIn("(\\r?\\n)?\\z", diagnostic)
         self.assertIn("return 'missing-diagnostic'", diagnostic)
         self.assertNotIn("ReadToEnd", diagnostic)
@@ -312,6 +313,31 @@ class MsiTests(unittest.TestCase):
         self.assertNotIn("throw $_", controller)
         self.assertNotIn("throw $read.Result", controller)
         self.assertNotIn("throw $Guardian.Errors", controller)
+
+    def test_bootstrap_marker_regex_accepts_only_complete_fixed_fields(self):
+        from test_ongrow_native_apply import BOOTSTRAP_FIELDS, BootstrapFailure, report_guardian_failure
+        import contextlib
+        import io
+        script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")
+        # Run the same enum/anchor regex over synthetic inputs. This is a source
+        # regression, not native PowerShell execution or MSI proof.
+        pattern = re.search(r"\$pattern = '([^']+)'", script).group(1).replace(r"\z", r"\Z")
+        diagnostic = {field: max(values, key=len) for field, values in BOOTSTRAP_FIELDS.items()}
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            report_guardian_failure("bootstrap", BootstrapFailure(diagnostic))
+        longest = output.getvalue()
+        self.assertLessEqual(len(longest), 256)
+        self.assertIsNotNone(re.fullmatch(pattern, longest))
+        for field, values in BOOTSTRAP_FIELDS.items():
+            for value in values:
+                self.assertIsNotNone(re.fullmatch(pattern, longest.replace(field + "=" + diagnostic[field], field + "=" + value)))
+        for malformed in (longest + longest, "raw-token " + longest, longest + "raw-token",
+                          longest.replace("phase=bootstrap", "phase=read"),
+                          longest.replace(" gate=MissingGate", ""),
+                          longest.replace(" reject=", " extra=unknown reject="),
+                          longest.replace(" owner=" + diagnostic["owner"], " owner=synthetic-token")):
+            self.assertIsNone(re.fullmatch(pattern, malformed))
 
     def test_native_optional_queries_keep_outer_array_and_preinstall_regression(self):
         script = Path(__file__).with_name("test_ongrow_windows_msi_lifecycle.ps1").read_text()
