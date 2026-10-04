@@ -160,4 +160,24 @@ pub(crate) mod store_handles {
         Ok(super::SessionLease { _lock: Some(std::sync::Arc::new(os::fixture_acquire(path, false)?)) })
     }
 }
+/// Owns only the exclusive gate for an existing Pending attempt.
+/// This grants no installer, health, Ready, rollback or cleanup authority.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) struct PendingRecoveryLease { _lock: os::Lock }
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn pending_recovery_lease(mut lock: os::Lock) -> Result<PendingRecoveryLease, Error> {
+    lock.require_pending()?;
+    Ok(PendingRecoveryLease { _lock: lock })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn acquire_pending_recovery() -> Result<PendingRecoveryLease, Error> {
+    let product = startup_policy()?.ok_or(Error::Disabled)?;
+    pending_recovery_lease(os::exclusive(product)?)
+}
+
+#[cfg(all(test, ongrow_pending_recovery_probe, any(target_os = "macos", target_os = "windows")))]
+#[path = "pending_recovery_tests.rs"]
+mod pending_recovery_tests;
 // ONGROW_STORE_ADDITIONS_END
