@@ -392,6 +392,15 @@ class SourceTests(unittest.TestCase):
             for forbidden in ("pull_request_target", "secrets."):
                 self.assertNotIn(forbidden, workflow)
 
+    def test_windows_never_restarts_msi_after_an_inflight_cleanup_timeout(self):
+        script = text(ROOT / "scripts/test_ongrow_windows_msi_lifecycle.ps1")
+        invoke = script.split("function Invoke-Msi(", 1)[1].split("function Read-Guardian", 1)[0]
+        self.assertIn("if ($script:NativeMsiInFlight) { throw 'Previous MSI still in flight; refusing any further MSI start' }", invoke)
+        self.assertLess(invoke.index("if ($script:NativeMsiInFlight)"), invoke.index("Start-Process"))
+        cleanup = script.split("foreach ($v in @(3,2,1)) {", 1)[1].split("foreach ($item in $sharedSentinels)", 1)[0]
+        self.assertIn("if ($script:NativeMsiInFlight) { break }", cleanup)
+        self.assertLess(cleanup.index("if ($script:NativeMsiInFlight)"), cleanup.index("try { Invoke-Msi"))
+
 
 class NativeTests(unittest.TestCase):
     def test_native_twice_missing_input_and_ordinary_app(self):

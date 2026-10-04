@@ -140,6 +140,7 @@ function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Seque
 
 $script:NativeMsiInFlight = $false
 function Invoke-Msi([string]$Verb, [string]$Target, [string]$Label, [int]$Expected = 0, [string[]]$Properties = @(), $Guardian = $null) {
+    if ($script:NativeMsiInFlight) { throw 'Previous MSI still in flight; refusing any further MSI start' }
     if ($Verb -notin @('/i','/x')) { throw 'Unexpected MSI operation' }
     $log = Join-Path $root "$Label.log"
     $args = @($Verb, "`"$Target`"", '/qn', '/norestart', '/L*v', "`"$log`"") + $Properties
@@ -348,6 +349,7 @@ foreach ($product in @('customer-desk','support-console')) {
         if ($installed -and -not $script:NativeMsiInFlight) {
             # Only these exact three probe ProductCodes can ever be cleaned up.
             foreach ($v in @(3,2,1)) {
+                if ($script:NativeMsiInFlight) { break }
                 try { Invoke-Msi '/x' $codes[$v] "$product-cleanup-v$v" } catch { Write-Warning 'Probe cleanup failed or product absent; runner is disposable' }
             }
         }
