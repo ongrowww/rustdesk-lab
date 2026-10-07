@@ -100,6 +100,20 @@ MSI rollback is not a substitute for post-commit application-health recovery.
 
 ## Evidence and limitations
 
+The separate `ongrow-windows-product-msi-lab.yml` installs the reviewed, real
+Desk and Console MSI artifacts from build revision `ed37a8fa`, not C# probes.
+It verifies same-repository build provenance, source ancestry, checksum,
+completion descriptor and native MSI identity before effects. An isolated
+GitHub Windows runner blocks both network directions for the exact installed
+executable before installation, including the Desk SCM children. Checks cover
+all installed payload hashes, owned package registration, actual Desk service
+start and Console URI ownership, then exact-ProductCode uninstall. The test
+does not start the GUI or grant access, kill timed-out MSI transactions, reset
+configuration, or remove directories recursively. A failed run keeps its
+network blocks and diagnostic state until disposable runner destruction.
+These checks are not authenticated updater health, replacement, rollback or
+automatic-update evidence. Do not enable automatic installation from them.
+
 `python3 scripts/test_ongrow_windows_msi.py` validates actual emitted XML and
 payload rejection/staging. It is not proof of native install or rollback.
 

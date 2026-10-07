@@ -84,6 +84,31 @@ class MsiTests(unittest.TestCase):
         for bad in [0, -1, msi.MAX_SEQUENCE + 1, True, "1"]:
             with self.assertRaises(ValueError): msi.version(bad)
 
+    def test_real_product_ci_is_exact_reviewed_artifacts_and_isolated_before_install(self):
+        script = (msi.ROOT / "scripts/test_ongrow_windows_product_msi.ps1").read_text(encoding="utf-8")
+        workflow = (msi.ROOT / ".github/workflows/ongrow-windows-product-msi-lab.yml").read_text(encoding="utf-8")
+        for required in ("$env:GITHUB_ACTIONS -ne 'true'", "$env:RUNNER_OS -ne 'Windows'",
+                         "descriptor.probe_only -ne $false", "descriptor.compiled -ne $true",
+                         "$descriptor.source_sha -ne $SourceSha", "$properties.ProductCode.Trim('{}') -ne $expectedCode",
+                         "foreach ($direction in @('Inbound','Outbound'))", "-Action Block -Program $exe -Profile Any",
+                         "$descriptor.payload_sha256.PSObject.Properties", "$process.WaitForExit(600000)",
+                         "$service.StartName -ne 'LocalSystem'", "NATIVE_REAL_PRODUCT_FRESH_INSTALL_PASS",
+                         "NATIVE_REAL_PRODUCT_UNINSTALL_PASS", "Invoke-Msi @('/x', $productCode"):
+            self.assertIn(required, script)
+        self.assertLess(script.index("New-NetFirewallRule"), script.index("Invoke-Msi @('/i'"))
+        for forbidden in ("Stop-Process", ".Kill(", "Remove-Item", "Set-Acl", "ExecutionPolicy Bypass",
+                          "Disable-NetFirewall", "VerifiedHealth", "commit_healthy", "--update"):
+            self.assertNotIn(forbidden, script)
+        for required in ("contents: read", "actions: read", "runs-on: windows-2022",
+                         "BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653",
+                         "ongrow-support-desk-msi-12-windows-x64", "ongrow-support-console-msi-36-windows-x64",
+                         "run.head_repository.full_name !== run.repository.full_name",
+                         "run.head_sha !== process.env.BUILD_SHA", "run.conclusion !== 'success'",
+                         "git merge-base --is-ancestor $env:BUILD_SHA HEAD", "persist-credentials: false",
+                         "System.Management.Automation.Language.Parser", "repository: ongrowww/rustdesk-lab"):
+            self.assertIn(required, workflow)
+        self.assertNotIn("secrets.", workflow)
+
     def test_xml_components_deterministic_upgrade_ids_and_product_codes(self):
         first, second = self.tree(), self.tree(sequence=2)
         p1, p2 = first.find("w:Package", NS), second.find("w:Package", NS)

@@ -30,6 +30,8 @@ SCOPE = (
     ".github/workflows/ongrow-autoupdate-windows-lab.yml",
     ".github/workflows/ongrow-lab-windows-x64.yml",
     ".github/workflows/ongrow-support-console-windows-x64.yml",
+    "scripts/test_ongrow_windows_product_msi.ps1",
+    ".github/workflows/ongrow-windows-product-msi-lab.yml",
     "docs/ongrow-windows-autoupdate.md",
     "flutter/macos/Runner.xcodeproj/project.pbxproj",
     "flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",

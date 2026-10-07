@@ -56,6 +56,8 @@ jobs:
             ':(exclude).github/workflows/ongrow-autoupdate-windows-lab.yml' \
             ':(exclude).github/workflows/ongrow-lab-windows-x64.yml' \
             ':(exclude).github/workflows/ongrow-support-console-windows-x64.yml' \
+            ':(exclude)scripts/test_ongrow_windows_product_msi.ps1' \
+            ':(exclude).github/workflows/ongrow-windows-product-msi-lab.yml' \
             ':(exclude)docs/ongrow-windows-autoupdate.md' \
             ':(exclude)flutter/macos/Runner.xcodeproj/project.pbxproj' \
             ':(exclude)flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved' \
