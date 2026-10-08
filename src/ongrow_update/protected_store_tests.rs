@@ -350,6 +350,166 @@ fn not_due_no_update_and_metadata_error_do_not_reserve_slot() {
 }
 
 #[test]
+fn resume_signed_attempt_child() {
+    let Some(path) = std::env::var_os("ONGROW_ATTEMPT_CHILD_ROOT") else { state_parent(); return; };
+    let public = std::env::var("ONGROW_ATTEMPT_CHILD_PUBLIC").unwrap();
+    assert_eq!(public.len(), 64);
+    let key: Vec<u8> = public.as_bytes().chunks_exact(2).map(|pair|
+        u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+    let identity = InstallationIdentity::trusted(Product::SupportConsole, Platform::WindowsX64,
+        Channel::Lab, 8, &key, &origin(), "/releases/").unwrap();
+    let store = ProtectedStore::fixture(Path::new(&path), identity, false, &ca(), 100).unwrap();
+    let mut ticket = run(store.resume_stage()).unwrap();
+    ticket.reverify().unwrap();
+    assert_eq!(ticket.candidate.manifest().release_sequence, 9);
+    assert!(matches!(store.snapshot().unwrap().state(), LastAcceptedSequence::Known(8)));
+    child(Path::new(&path), "busy");
+    println!("NATIVE_SIGNED_ATTEMPT_RESUME_PASS");
+}
+
+#[test]
+fn signed_attempt_survives_process_exit_without_network_or_state_advance() {
+    let fixture = Fixture::at("attempt-restart");
+    let store = fixture.store(true);
+    session_gate::store_handles::fixture_gate_initialize(&fixture.path).unwrap();
+    fixture.publish(false, 9);
+    let ticket = match run(store.download(true)).unwrap() { StageOutcome::Sealed(ticket) => ticket, _ => panic!("sealed") };
+    let attempt = fixture.path.join("attempt-v1.signed");
+    let before = fs::read(&attempt).unwrap();
+    assert_eq!(before.len(), 76 + ticket.raw_manifest.len());
+    rejects(run(store.resume_stage()), Some(Error::Trust(session_gate::Error::Busy)));
+    #[cfg(target_os = "windows")]
+    {
+        assert!(fs::OpenOptions::new().write(true).open(&attempt).is_err());
+        assert!(fs::remove_file(&attempt).is_err());
+    }
+    drop(ticket); drop(store);
+    reset();
+    let public: String = fixture.public.0.iter().map(|byte| format!("{byte:02x}")).collect();
+    let result = Command::new(std::env::current_exe().unwrap()).args(["--exact",
+        "ongrow_update::protected_store::tests::resume_signed_attempt_child", "--nocapture"])
+        .env("ONGROW_ATTEMPT_CHILD_ROOT", &fixture.path).env("ONGROW_ATTEMPT_CHILD_PUBLIC", public)
+        .output().unwrap();
+    assert!(result.status.success(), "resume child failed: {} {}",
+        String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("NATIVE_SIGNED_ATTEMPT_RESUME_PASS"));
+    assert!(requests().is_empty());
+    assert_eq!(fs::read(&attempt).unwrap(), before);
+    assert_eq!(fs::read(fixture.path.join("state-v1.journal")).unwrap(), [0]);
+    child(&fixture.path, "free");
+    println!("NATIVE_SIGNED_ATTEMPT_PROCESS_PASS");
+}
+
+#[test]
+fn signed_attempt_resume_rejects_corruption_expiry_replay_and_foreign_identity() {
+    for case in ["magic", "empty", "short", "long", "size", "oversize", "signature", "manifest",
+                 "missing", "hardlink", "alias", "payload-missing", "payload-short", "payload-long", "payload-hash",
+                 "expired", "replay", "wrong-key", "wrong-channel", "wrong-baked-sequence", "wrong-product"] {
+        let fixture = Fixture::at(&format!("attempt-{case}"));
+        let store = fixture.store(true);
+        fixture.publish(false, 9);
+        drop(match run(store.download(true)).unwrap() { StageOutcome::Sealed(ticket) => ticket, _ => panic!("sealed") });
+        drop(store);
+        let attempt = fixture.path.join("attempt-v1.signed");
+        let mut bytes = fs::read(&attempt).unwrap();
+        let mut identity = fixture.identity();
+        match case {
+            "missing" => fs::remove_file(&attempt).unwrap(),
+            "hardlink" => fs::hard_link(&attempt, fixture.path.join("linked-attempt")).unwrap(),
+            "alias" => {
+                fs::rename(&attempt, fixture.path.join("original-attempt")).unwrap();
+                #[cfg(target_os = "macos")]
+                std::os::unix::fs::symlink(fixture.path.join("original-attempt"), &attempt).unwrap();
+                #[cfg(target_os = "windows")]
+                assert!(Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&attempt)
+                    .arg(&fixture.path).output().unwrap().status.success());
+            }
+            "payload-missing" => fs::remove_file(fixture.payload()).unwrap(),
+            "payload-short" | "payload-long" | "payload-hash" => {
+                let mut payload = fs::read(fixture.payload()).unwrap();
+                match case { "payload-short" => { payload.pop(); }, "payload-long" => payload.push(0), _ => payload[0] ^= 1 }
+                fs::write(fixture.payload(), payload).unwrap();
+            }
+            "expired" => {},
+            "replay" => fs::write(fixture.path.join("accepted-sequence-v1"), identity.record(9)).unwrap(),
+            "wrong-key" => identity.key[0] ^= 1,
+            "wrong-channel" => identity.channel = Channel::Stable,
+            "wrong-baked-sequence" => identity.baked_sequence = 9,
+            "wrong-product" => {
+                let mut manifest: serde_json::Value = serde_json::from_slice(&bytes[76..]).unwrap();
+                manifest["product"] = json!("customer-desk");
+                let raw = serde_json::to_vec(&manifest).unwrap();
+                let mut domain = super::super::SIGNATURE_DOMAIN.to_vec(); domain.extend_from_slice(&raw);
+                let signature = sign::sign_detached(&domain, &fixture.secret).to_bytes();
+                let mut modified = bytes[..8].to_vec();
+                modified.extend_from_slice(&(raw.len() as u32).to_be_bytes());
+                modified.extend_from_slice(&signature); modified.extend_from_slice(&raw);
+                fs::write(&attempt, modified).unwrap();
+            }
+            _ => {
+                match case {
+                    "magic" => bytes[0] ^= 1,
+                    "empty" => bytes.clear(),
+                    "short" => { bytes.pop(); },
+                    "long" => bytes.push(0),
+                    "size" => bytes[8..12].copy_from_slice(&0u32.to_be_bytes()),
+                    "oversize" => bytes.resize(super::super::MAX_MANIFEST_BYTES + 77, 0),
+                    "signature" => bytes[12] ^= 1,
+                    "manifest" => bytes[76] ^= 1,
+                    _ => unreachable!(),
+                }
+                fs::write(&attempt, bytes).unwrap();
+            }
+        }
+        let store = ProtectedStore::fixture(&fixture.path, identity, false, &ca(), if case == "expired" { 111 } else { 100 }).unwrap();
+        let before = (fs::read(&attempt).ok(), fs::read(fixture.payload()).ok(),
+            fs::read(fixture.path.join("accepted-sequence-v1")).unwrap());
+        reset();
+        rejects(run(store.resume_stage()), None);
+        assert!(requests().is_empty());
+        assert_eq!(before, (fs::read(&attempt).ok(), fs::read(fixture.payload()).ok(),
+            fs::read(fixture.path.join("accepted-sequence-v1")).unwrap()));
+        child(&fixture.path, "free");
+    }
+}
+
+#[test]
+fn orphan_attempt_blocks_new_download_before_network() {
+    let fixture = Fixture::at("attempt-orphan");
+    let store = fixture.store(true);
+    fs::write(fixture.path.join("attempt-v1.signed"), b"partial attempt").unwrap();
+    reset();
+    rejects(run(store.download(true)), Some(Error::State));
+    assert!(requests().is_empty());
+    assert!(!fixture.payload().exists());
+    assert_eq!(fs::read(fixture.path.join("attempt-v1.signed")).unwrap(), b"partial attempt");
+}
+
+#[test]
+fn signed_attempt_existing_record_never_overwritten_and_live_mutation_detected() {
+    let fixture = Fixture::at("attempt-no-overwrite");
+    let store = fixture.store(true);
+    fixture.publish(false, 9);
+    let (pending, transfer) = tls_pending(&store);
+    fs::write(fixture.path.join("attempt-v1.signed"), b"foreign existing attempt").unwrap();
+    rejects(run(pending.seal(transfer)), None);
+    assert_eq!(fs::read(fixture.path.join("attempt-v1.signed")).unwrap(), b"foreign existing attempt");
+    let fixture = Fixture::at("attempt-live");
+    let store = fixture.store(true);
+    fixture.publish(false, 9);
+    let mut ticket = match run(store.download(true)).unwrap() { StageOutcome::Sealed(ticket) => ticket, _ => panic!("sealed") };
+    #[cfg(target_os = "macos")]
+    {
+        let path = fixture.path.join("attempt-v1.signed");
+        let mut bytes = fs::read(&path).unwrap(); bytes[12] ^= 1;
+        fs::write(&path, bytes).unwrap();
+        rejects(ticket.reverify(), Some(Error::State));
+    }
+    #[cfg(target_os = "windows")]
+    ticket.reverify().unwrap();
+}
+
+#[test]
 fn seal_fresh_state_time_and_tampered_bytes_rejected() {
     for case in ["seal-state", "seal-time", "seal-short", "seal-long", "seal-hash", "seal-replacement"] {
         let fixture = Fixture::at(case);

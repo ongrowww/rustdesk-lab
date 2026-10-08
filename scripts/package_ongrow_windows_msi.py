@@ -22,7 +22,11 @@ ET.register_namespace("", NS)
 # Public, deterministic package identities, not device or user identifiers.
 IDENTITY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://ongrow.de/software/msi/v1")
 MAX_SEQUENCE = 256 * 256 * 65536 - 1
-SNAPSHOT_FIELDS = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+# CPython's Windows path-stat and fd-stat disagree on deprecated ctime
+# semantics. Use the documented creation time on Windows, never a tolerance
+# or a discarded identity check. Unix ctime retains metadata-change semantics.
+SNAPSHOT_FIELDS = ("st_dev", "st_ino", "st_size", "st_mtime_ns",
+                   "st_birthtime_ns" if os.name == "nt" else "st_ctime_ns")
 PROFILES = {
     "customer-desk": dict(name="OnGROW Support Desk", internal="ongrow_support_desk", scope="perMachine"),
     "support-console": dict(name="OnGROW Support Console", internal="ongrow_support_console", scope="perUser"),
@@ -74,11 +78,18 @@ def pe(path: Path, dll: bool):
     return data
 
 
+def metadata_snapshot(metadata):
+    try:
+        return tuple(getattr(metadata, field) for field in SNAPSHOT_FIELDS)
+    except AttributeError as error:
+        raise ValueError("Required precise filesystem metadata unavailable") from error
+
+
 def snapshot(path: Path):
     s = path.lstat()
     if redirected(path) or not stat.S_ISREG(s.st_mode) or s.st_nlink != 1:
         raise ValueError("Redirected, hardlinked or nonregular payload refused")
-    return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    return metadata_snapshot(s)
 
 
 def differing_fields(expected, actual):
@@ -262,7 +273,7 @@ def package(source, output, product, sequence, upstream, sha, emit_only=False, p
             raise ValueError("Source changed before copy")
         with src.open("rb") as inp, target.open("xb") as out:
             s = os.fstat(inp.fileno())
-            opened = (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            opened = metadata_snapshot(s)
             if opened != expected:
                 raise ValueError("Source redirected before open (differing fields: " + differing_fields(expected, opened) + ")")
             digest = hashlib.sha256()
@@ -270,7 +281,7 @@ def package(source, output, product, sequence, upstream, sha, emit_only=False, p
                 digest.update(chunk)
                 out.write(chunk)
             s = os.fstat(inp.fileno())
-            if (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns) != expected or snapshot(src) != expected:
+            if metadata_snapshot(s) != expected or snapshot(src) != expected:
                 raise ValueError("Source changed during copy")
         hashes[rel] = digest.hexdigest()
     with (output / "Package.wxs").open("xb") as out:

@@ -115,13 +115,14 @@ pub(crate) mod store_handles {
     use std::fs::File;
 
     #[derive(Clone, Copy)]
-    pub(crate) enum Child { Sequence, StageLock, Payload }
+    pub(crate) enum Child { Sequence, StageLock, Payload, Attempt }
     impl Child {
         pub(super) fn name(self) -> &'static str {
             match self {
                 Self::Sequence => "accepted-sequence-v1",
                 Self::StageLock => "staging-v1.lock",
                 Self::Payload => "stage-v1.payload",
+                Self::Attempt => "attempt-v1.signed",
             }
         }
     }

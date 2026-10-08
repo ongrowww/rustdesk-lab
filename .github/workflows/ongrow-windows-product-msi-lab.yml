@@ -1,0 +1,88 @@
+name: OnGROW real Windows product MSI installation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/test_ongrow_windows_product_msi.ps1'
+      - '.github/workflows/ongrow-windows-product-msi-lab.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  product-install:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: customer-desk
+            build_run: '37229320040'
+            artifact: ongrow-support-desk-msi-12-windows-x64
+            workflow: ongrow-lab-windows-x64.yml
+          - product: support-console
+            build_run: '37229284217'
+            artifact: ongrow-support-console-msi-36-windows-x64
+            workflow: ongrow-support-console-windows-x64.yml
+    env:
+      BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653
+    steps:
+      - name: Checkout exact installation test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify reviewed product build provenance
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          BUILD_RUN: ${{ matrix.build_run }}
+          BUILD_WORKFLOW: ${{ matrix.workflow }}
+          BUILD_ARTIFACT: ${{ matrix.artifact }}
+        with:
+          script: |
+            const runId = Number(process.env.BUILD_RUN);
+            const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: runId});
+            if (run.repository.full_name !== 'ongrowww/rustdesk-lab' ||
+                run.head_repository.full_name !== run.repository.full_name ||
+                run.head_sha !== process.env.BUILD_SHA || run.conclusion !== 'success' ||
+                run.path !== `.github/workflows/${process.env.BUILD_WORKFLOW}` ||
+                !['workflow_dispatch', 'pull_request'].includes(run.event)) {
+              throw new Error('Untrusted product build');
+            }
+            const {data: artifacts} = await github.rest.actions.listWorkflowRunArtifacts({...context.repo, run_id: runId});
+            const matches = artifacts.artifacts.filter(a => a.name === process.env.BUILD_ARTIFACT && !a.expired);
+            if (matches.length !== 1) throw new Error('Reviewed product artifact missing');
+      - name: Verify source ancestry and PowerShell parser
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((& git rev-parse HEAD).Trim() -ne $env:SOURCE_SHA) { throw 'Test source SHA mismatch' }
+          git merge-base --is-ancestor $env:BUILD_SHA HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Product is outside reviewed branch ancestry' }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$pwd/scripts/test_ongrow_windows_product_msi.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { throw 'Product install test PowerShell syntax invalid' }
+      - name: Download exact existing product MSI
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/ongrow-product-msi
+          run-id: ${{ matrix.build_run }}
+          github-token: ${{ github.token }}
+          repository: ongrowww/rustdesk-lab
+      - name: Install and uninstall real app with blocked network
+        shell: pwsh
+        env:
+          PRODUCT: ${{ matrix.product }}
+          ONGROW_CI_SMOKE_TEST: '1'
+        run: |
+          ./scripts/test_ongrow_windows_product_msi.ps1 -Product $env:PRODUCT -ArtifactDirectory "$env:RUNNER_TEMP/ongrow-product-msi" -SourceSha $env:BUILD_SHA
+          if (-not $?) { throw 'Real product MSI test failed' }

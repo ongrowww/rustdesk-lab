@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from test_ongrow_update_store import addition, ORIGINAL
 from test_ongrow_update_session_gate import windows_probe_state_directory
@@ -28,6 +29,10 @@ SCOPE = (
     "res/msi/ongrow/Package.wixproj",
     "res/msi/ongrow/Package.wxs",
     ".github/workflows/ongrow-autoupdate-windows-lab.yml",
+    ".github/workflows/ongrow-lab-windows-x64.yml",
+    ".github/workflows/ongrow-support-console-windows-x64.yml",
+    "scripts/test_ongrow_windows_product_msi.ps1",
+    ".github/workflows/ongrow-windows-product-msi-lab.yml",
     "docs/ongrow-windows-autoupdate.md",
     "flutter/macos/Runner.xcodeproj/project.pbxproj",
     "flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
@@ -46,6 +51,11 @@ SCOPE = (
     ".github/workflows/ongrow-lab-macos-arm64.yml",
     ".github/workflows/ongrow-support-console-macos-arm64.yml",
     "src/ongrow_update/session_gate.rs",
+    "src/ongrow_update/protected_store.rs",
+    "src/ongrow_update/protected_store/attempt.rs",
+    "src/ongrow_update/protected_store_tests.rs",
+    "scripts/test_ongrow_update_store.py",
+    "docs/ongrow-update-store.md",
     "src/ongrow_update/native_apply_tests.rs",
     "scripts/fixtures/ongrow_native_apply_probe/lib.rs",
     "scripts/test_ongrow_native_apply.py",
@@ -67,20 +77,47 @@ def source(path):
     return path.read_text(encoding="utf-8", errors="strict")
 
 
+def frozen_addition(name):
+    block = addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name])
+    if name == "session_gate.rs":
+        # Only the new fixed, non-path-selectable signed-attempt child is admitted.
+        # All earlier gate/store bytes are still compared against their old hashes.
+        current = "pub(crate) enum Child { Sequence, StageLock, Payload, Attempt }"
+        declaration = '                Self::Attempt => "attempt-v1.signed",\n'
+        if block.count(current) != 1 or block.count(declaration) != 1:
+            raise AssertionError("Exact signed-attempt child extension required")
+        block = block.replace(current, "pub(crate) enum Child { Sequence, StageLock, Payload }")
+        block = block.replace(declaration, "")
+    return block
+
+
 class SourceTests(unittest.TestCase):
+    def test_signed_child_extension_does_not_admit_other_gate_changes(self):
+        block = addition(ROOT / "src/ongrow_update/session_gate.rs", ORIGINAL["session_gate.rs"])
+        for mutated in (
+                block.replace('Self::Attempt => "attempt-v1.signed"', 'Self::Attempt => "selected-path"'),
+                block.replace("Payload, Attempt }", "Payload, Attempt, Arbitrary }")):
+            with self.subTest(mutation=mutated[-80:]), mock.patch(__name__ + ".addition", return_value=mutated):
+                with self.assertRaisesRegex(AssertionError, "Exact signed-attempt child extension required"):
+                    frozen_addition("session_gate.rs")
+        with mock.patch(__name__ + ".addition", return_value=block.replace("pub(crate) struct StageLease", "pub struct StageLease")):
+            canonical = frozen_addition("session_gate.rs").encode("utf-8")
+            length, digest = OLD_ADDITIONS["session_gate.rs"]
+            self.assertNotEqual(hashlib.sha256(canonical[:length]).hexdigest(), digest)
+
     def test_original_bodies_and_existing_addition_bytes_are_unchanged(self):
         for name, (length, digest) in OLD_ADDITIONS.items():
             with self.subTest(source=name):
-                block = addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name]).encode("utf-8")
+                block = frozen_addition(name).encode("utf-8")
                 self.assertEqual(hashlib.sha256(block[:length]).hexdigest(), digest)
                 self.assertGreater(len(block), length)
-        block = addition(ROOT / "src/ongrow_update/session_gate.rs", ORIGINAL["session_gate.rs"]).encode("utf-8")
+        block = frozen_addition("session_gate.rs").encode("utf-8")
         length, digest = PENDING_GATE_FREEZE
         self.assertEqual(hashlib.sha256(block[:length]).hexdigest(), digest)
         self.assertEqual(block[length:].decode("utf-8", errors="strict"), NATIVE_DECLARATION)
 
     def test_factory_owns_same_exclusive_lock_without_new_authority(self):
-        blocks = {name: addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name])
+        blocks = {name: frozen_addition(name)
                   .encode("utf-8")[length:].decode("utf-8", errors="strict")
                   for name, (length, _) in OLD_ADDITIONS.items()}
         self.assertTrue(blocks["session_gate.rs"].endswith(NATIVE_DECLARATION))

@@ -54,6 +54,10 @@ jobs:
             ':(exclude)res/msi/ongrow/Package.wixproj' \
             ':(exclude)res/msi/ongrow/Package.wxs' \
             ':(exclude).github/workflows/ongrow-autoupdate-windows-lab.yml' \
+            ':(exclude).github/workflows/ongrow-lab-windows-x64.yml' \
+            ':(exclude).github/workflows/ongrow-support-console-windows-x64.yml' \
+            ':(exclude)scripts/test_ongrow_windows_product_msi.ps1' \
+            ':(exclude).github/workflows/ongrow-windows-product-msi-lab.yml' \
             ':(exclude)docs/ongrow-windows-autoupdate.md' \
             ':(exclude)flutter/macos/Runner.xcodeproj/project.pbxproj' \
             ':(exclude)flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved' \
@@ -72,6 +76,11 @@ jobs:
             ':(exclude).github/workflows/ongrow-lab-macos-arm64.yml' \
             ':(exclude).github/workflows/ongrow-support-console-macos-arm64.yml' \
             ':(exclude)src/ongrow_update/session_gate.rs' \
+            ':(exclude)src/ongrow_update/protected_store.rs' \
+            ':(exclude)src/ongrow_update/protected_store/attempt.rs' \
+            ':(exclude)src/ongrow_update/protected_store_tests.rs' \
+            ':(exclude)scripts/test_ongrow_update_store.py' \
+            ':(exclude)docs/ongrow-update-store.md' \
             ':(exclude)src/ongrow_update/native_apply_tests.rs' \
             ':(exclude)scripts/fixtures/ongrow_native_apply_probe/lib.rs' \
             ':(exclude)scripts/test_ongrow_native_apply.py' \

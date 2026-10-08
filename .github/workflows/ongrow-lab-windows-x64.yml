@@ -359,6 +359,47 @@ jobs:
           $actual = (Get-FileHash $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($recorded -ne $actual) { throw "Staged executable checksum mismatch" }
 
+      - name: Select pinned MSI packaging SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.408'
+
+      - name: Package verified Desk as native MSI
+        shell: pwsh
+        env:
+          RELEASE_SEQUENCE: ${{ github.run_number }}
+        run: |
+          $sdk = @{ sdk = @{ version = '8.0.408'; rollForward = 'disable' } } | ConvertTo-Json
+          $sdk | Set-Content global.json -Encoding utf8
+          $version = (& dotnet --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -ne '8.0.408') { throw 'Pinned MSI SDK unavailable' }
+          python scripts/test_ongrow_windows_msi.py
+          if ($LASTEXITCODE -ne 0) { throw 'MSI packaging checks failed' }
+          $release = 'flutter/build/windows/x64/runner/Release'
+          $source = 'dist/msi-source-desk'
+          New-Item -ItemType Directory -Path $source | Out-Null
+          Copy-Item -Recurse "$release/*" $source
+          Copy-Item LICENCE $source
+          Copy-Item ongrow-build-provenance.txt $source
+          python scripts/package_ongrow_windows_msi.py --source $source --output dist/msi-build-desk --product customer-desk --sequence $env:RELEASE_SEQUENCE --upstream-version $env:VERSION --source-sha $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Desk MSI packaging failed' }
+          $publish = 'dist/ongrow-desk-msi'
+          New-Item -ItemType Directory -Path $publish | Out-Null
+          $name = "ongrow-support-desk-$env:VERSION-windows-x64-$env:RELEASE_SEQUENCE-$($env:GITHUB_SHA.Substring(0,8))-unsigned-lab.msi"
+          $target = Join-Path $publish $name
+          Copy-Item dist/msi-build-desk/bin/Release/OnGROW.msi $target
+          $digest = (Get-FileHash $target -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  $name" | Set-Content -Encoding ascii "$target.sha256"
+          Copy-Item dist/msi-build-desk/package.json $publish
+
+      - name: Upload unsigned Desk MSI installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ongrow-support-desk-msi-${{ github.run_number }}-windows-x64
+          retention-days: 7
+          if-no-files-found: error
+          path: dist/ongrow-desk-msi/
+
       - name: Upload unsigned Windows x64 lab artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

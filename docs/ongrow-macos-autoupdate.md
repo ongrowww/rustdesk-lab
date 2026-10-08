@@ -20,9 +20,14 @@ incoming and outgoing sessions racing against installation, failure recovery
 and appdata preservation. Do not remove the gate until those tests pass. Keep
 the independent Rust upstream updater blocked.
 The native Mac transport deliberately accepts the unmodified Sparkle redirect
-policy. The initial feed is fixed to the OnGROW product path; before production
-activation, validate the initial archive enclosure URL against that product's
-origin/prefix too. Redirects followed by the native SDK may leave that prefix.
+policy. The initial feed is fixed to the OnGROW product path.
+The production delegate validates initial archive URLs
+through the signed appcast and chosen-item callbacks. Every full/delta candidate
+must be a bounded plain filename beneath the exact product path. Package-based
+installers and external release-note downloads are rejected. This is an initial
+request check, not installation authority. Cached resume still requires the
+future protected attempt/recovery integration; the compiled start/check gate
+continues to block every update cycle. Redirects followed by the native SDK may leave that prefix.
 This is not a strict runtime redirect allowlist. Both feed and archive require
 Ed25519 signatures checked against the baked-in public key, with signing-failure
 fallback disabled and normal HTTPS/ATS checks retained. Requests carry no

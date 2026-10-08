@@ -167,33 +167,61 @@ function Invoke-Msi([string]$Verb, [string]$Target, [string]$Label, [int]$Expect
     if ($p.ExitCode -ne $Expected) { throw "MSI $Label failed: exit $($p.ExitCode), expected $Expected (isolated log retained)" }
 }
 
-function Read-Guardian($Guardian, [bool]$AllowExit = $false) {
-    $read = $Guardian.Process.StandardOutput.ReadLineAsync()
-    if (-not $read.Wait(20000)) { throw 'Bounded guardian handshake timed out' }
-    if (($Guardian.Process.HasExited -and -not $AllowExit) -or $null -eq $read.Result -or $read.Result.Length -gt 256) { throw 'Guardian child lost or malformed response' }
-    $message = $read.Result | ConvertFrom-Json
-    if (@($message.PSObject.Properties).Count -ne 1 -or $message.status -notin @('Ready','Pending','Busy','Closed')) { throw 'Unexpected guardian status' }
+function Get-GuardianDiagnostic($Guardian) {
+    # Never await a live controller or emit its raw stderr. Accept one enum-only marker.
+    if (-not $Guardian.Process.HasExited) { return 'missing-diagnostic' }
+    try {
+        if (-not $Guardian.Errors.Wait(1000)) { return 'missing-diagnostic' }
+        $diagnostic = $Guardian.Errors.Result
+        $pattern = '\A(?:ONGROW_GUARDIAN_FAILURE phase=(build|bootstrap|read|session|transaction|recovery|admit|pending-owner|native-starting|assertions-complete|mutation-unknown|end|crash|close|cleanup|unknown) kind=(runtime|timeout|decode|json|io|process|other) category=(unknown|runner|product|rust-version|build-executable|bootstrap-status|protocol-bounds|protocol-shape|protocol-op|child-lost|child-exit|child-output|child-status|child-reader|owner-existing|owner-missing|pending-journal|admission|owner-end|root-api|root-folder|root-path|root-drive|root-attributes|root-create|timeout|decode|json|json-bom|pipe|io|process)|ONGROW_GUARDIAN_FAILURE phase=bootstrap kind=runtime category=bootstrap-status gate=(Ready|Pending|Busy|MissingGate|Untrusted|Io|Disabled|unknown) reject=(token-open|token-size|token-user|attributes-read|attributes-or-hardlinks|security-descriptor|owner-trust|owner-exact-user|acl-information|acl-entry-read|acl-entry-null|acl-entry-type-or-size|forbidden-access|directory-open|file-create|file-open|root-prefix|root-drive-prefix|root-drive-type|directory-component|directory-empty|bootstrap-state-already-present|unknown) context=(root-volume|protected-root|direct-parent|outer-ancestor|journal-bootstrap|gate-bootstrap|unknown) owner=(system|admins|builtin-users|everyone|creator-owner|local-service|network-service|authenticated-users|owner-rights|builtin-guests|builtin-power-users|builtin-backup-operators|builtin-remote-desktop-users|builtin-remote-management-users|current-user|all-services|trusted-installer|windows-account-form|other|unknown) access=(system|admins|builtin-users|everyone|creator-owner|local-service|network-service|authenticated-users|owner-rights|builtin-guests|builtin-power-users|builtin-backup-operators|builtin-remote-desktop-users|builtin-remote-management-users|current-user|all-services|trusted-installer|windows-account-form|other|unknown))(\r?\n)?\z'
+        if ($null -ne $diagnostic -and $diagnostic.Length -le 256 -and $diagnostic -cmatch $pattern) { return $diagnostic.TrimEnd([char[]]"`r`n") }
+    } catch { }
+    return 'missing-diagnostic'
+}
+function Throw-GuardianFailure($Guardian, [string]$Phase, [string]$Category) {
+    if ($Phase -notin @('bootstrap','read','session','transaction','recovery','admit','pending-owner','native-starting','assertions-complete','mutation-unknown','end','crash','close')) { $Phase = 'unknown' }
+    if ($Category -notin @('timeout','response','lost','malformed','status','write')) { $Category = 'unknown' }
+    $exit = 'running'
+    if ($Guardian.Process.HasExited) { $exit = [string]$Guardian.Process.ExitCode }
+    $diagnostic = Get-GuardianDiagnostic $Guardian
+    throw "Guardian failure phase=$Phase category=$Category exit=$exit $diagnostic"
+}
+function Read-Guardian($Guardian, [bool]$AllowExit = $false, [string]$Phase = 'read') {
+    try {
+        $read = $Guardian.Process.StandardOutput.ReadLineAsync()
+        $completed = $read.Wait(20000)
+    } catch { Throw-GuardianFailure $Guardian $Phase 'response' }
+    if (-not $completed) { Throw-GuardianFailure $Guardian $Phase 'timeout' }
+    if (($Guardian.Process.HasExited -and -not $AllowExit) -or $null -eq $read.Result) { Throw-GuardianFailure $Guardian $Phase 'lost' }
+    if ($read.Result.Length -gt 256) { Throw-GuardianFailure $Guardian $Phase 'malformed' }
+    try { $message = $read.Result | ConvertFrom-Json } catch { Throw-GuardianFailure $Guardian $Phase 'malformed' }
+    try { $valid = @($message.PSObject.Properties).Count -eq 1 -and $message.status -in @('Ready','Pending','Busy','Closed') } catch { Throw-GuardianFailure $Guardian $Phase 'status' }
+    if (-not $valid) { Throw-GuardianFailure $Guardian $Phase 'status' }
     return $message.status
 }
 function Assert-Guardian($Guardian, [string]$Operation, [string]$Expected) {
-    if ($Guardian.Process.HasExited) { throw 'Guardian lost before native assertion' }
-    $Guardian.Process.StandardInput.WriteLine((@{ op = $Operation } | ConvertTo-Json -Compress))
-    $Guardian.Process.StandardInput.Flush()
-    if ((Read-Guardian $Guardian ($Operation -eq 'close')) -ne $Expected) { throw "Actual gate assertion failed for $Operation" }
+    if ($Guardian.Process.HasExited) { Throw-GuardianFailure $Guardian $Operation 'lost' }
+    try {
+        $Guardian.Process.StandardInput.WriteLine((@{ op = $Operation } | ConvertTo-Json -Compress))
+        $Guardian.Process.StandardInput.Flush()
+    } catch { Throw-GuardianFailure $Guardian $Operation 'write' }
+    if ((Read-Guardian $Guardian ($Operation -eq 'close') $Operation) -ne $Expected) { Throw-GuardianFailure $Guardian $Operation 'status' }
 }
 function Start-Guardian([string]$Product) {
-    if ($Product -notin @('customer-desk','support-console')) { throw 'Unknown isolated product' }
-    $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = (Get-Command python -CommandType Application).Source
-    $start.UseShellExecute = $false
-    $start.RedirectStandardInput = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    foreach ($argument in @((Join-Path $PSScriptRoot 'test_ongrow_native_apply.py'), '--ci-windows-guardian', $Product)) { $start.ArgumentList.Add($argument) }
-    $process = [Diagnostics.Process]::Start($start)
+    if ($Product -notin @('customer-desk','support-console')) { throw 'Guardian failure phase=bootstrap category=product exit=not-started missing-diagnostic' }
+    try {
+        $start = [Diagnostics.ProcessStartInfo]::new()
+        $start.FileName = (Get-Command python -CommandType Application).Source
+        $start.UseShellExecute = $false
+        $start.RedirectStandardInput = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        foreach ($argument in @((Join-Path $PSScriptRoot 'test_ongrow_native_apply.py'), '--ci-windows-guardian', $Product)) { $start.ArgumentList.Add($argument) }
+        $process = [Diagnostics.Process]::Start($start)
+    } catch { throw 'Guardian failure phase=bootstrap category=start exit=not-started missing-diagnostic' }
     $guardian = [PSCustomObject]@{ Process = $process; Errors = $process.StandardError.ReadToEndAsync(); NativeStarted = $false }
     try {
-        if ((Read-Guardian $guardian) -ne 'Ready') { throw 'Fresh guardian bootstrap failed' }
+        if ((Read-Guardian $guardian $false 'bootstrap') -ne 'Ready') { Throw-GuardianFailure $guardian 'bootstrap' 'status' }
     } catch {
         if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit(10000) | Out-Null }
         $process.Dispose()

@@ -11,6 +11,36 @@ enum OnGrowUpdatePolicy {
         return products[role] != nil && value == "https://ongrow.de/assets/updates/\(role)/macos-arm64/appcast.xml"
     }
 
+    static func validArchive(_ value: String, role: String) -> Bool {
+        let prefix = "https://ongrow.de/assets/updates/\(role)/macos-arm64/"
+        guard products[role] != nil, value.utf8.count <= 2048,
+              value.hasPrefix(prefix) else { return false }
+        // Validate the raw enclosure, not a decoded/normalized URL. Stock
+        // Sparkle may still follow HTTPS redirects after this initial request.
+        let filename = value.dropFirst(prefix.count)
+        guard !filename.isEmpty, filename.utf8.count <= 255,
+              filename != ".", filename != "..", !filename.hasSuffix(".") else { return false }
+        return filename.utf8.allSatisfy { byte in
+            (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+            (byte >= 48 && byte <= 57) || byte == 45 || byte == 95 || byte == 46
+        }
+    }
+
+    static func mayProceed(_ info: [String: Any], feedSigned: Bool,
+                           archive: String?, deltaArchives: [String?],
+                           installationType: String) -> Bool {
+        guard configured(info), feedSigned, installationType == "application",
+              let role = info["OnGrowUpdateRole"] as? String,
+              let archive = archive, validArchive(archive, role: role),
+              deltaArchives.count <= 256 else { return false }
+        // The selected delta and its full-archive fallback both come from the
+        // signed appcast. Never allow a secondary candidate outside the role.
+        return deltaArchives.allSatisfy { candidate in
+            guard let candidate = candidate else { return false }
+            return validArchive(candidate, role: role)
+        }
+    }
+
     static func configured(_ info: [String: Any]) -> Bool {
         guard let role = info["OnGrowUpdateRole"] as? String,
               let product = products[role],

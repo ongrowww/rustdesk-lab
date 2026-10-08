@@ -2,6 +2,7 @@
 """Portable validation/XML tests. These are not native MSI lifecycle tests."""
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -82,6 +83,31 @@ class MsiTests(unittest.TestCase):
         self.assertEqual(triples, sorted(triples))
         for bad in [0, -1, msi.MAX_SEQUENCE + 1, True, "1"]:
             with self.assertRaises(ValueError): msi.version(bad)
+
+    def test_real_product_ci_is_exact_reviewed_artifacts_and_isolated_before_install(self):
+        script = (msi.ROOT / "scripts/test_ongrow_windows_product_msi.ps1").read_text(encoding="utf-8")
+        workflow = (msi.ROOT / ".github/workflows/ongrow-windows-product-msi-lab.yml").read_text(encoding="utf-8")
+        for required in ("$env:GITHUB_ACTIONS -ne 'true'", "$env:RUNNER_OS -ne 'Windows'",
+                         "descriptor.probe_only -ne $false", "descriptor.compiled -ne $true",
+                         "$descriptor.source_sha -ne $SourceSha", "$properties.ProductCode.Trim('{}') -ne $expectedCode",
+                         "foreach ($direction in @('Inbound','Outbound'))", "-Action Block -Program $exe -Profile Any",
+                         "$descriptor.payload_sha256.PSObject.Properties", "$process.WaitForExit(600000)",
+                         "$service.StartName -ne 'LocalSystem'", "NATIVE_REAL_PRODUCT_FRESH_INSTALL_PASS",
+                         "NATIVE_REAL_PRODUCT_UNINSTALL_PASS", "Invoke-Msi @('/x', $productCode"):
+            self.assertIn(required, script)
+        self.assertLess(script.index("New-NetFirewallRule"), script.index("Invoke-Msi @('/i'"))
+        for forbidden in ("Stop-Process", ".Kill(", "Remove-Item", "Set-Acl", "ExecutionPolicy Bypass",
+                          "Disable-NetFirewall", "VerifiedHealth", "commit_healthy", "--update"):
+            self.assertNotIn(forbidden, script)
+        for required in ("contents: read", "actions: read", "runs-on: windows-2022",
+                         "BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653",
+                         "ongrow-support-desk-msi-12-windows-x64", "ongrow-support-console-msi-36-windows-x64",
+                         "run.head_repository.full_name !== run.repository.full_name",
+                         "run.head_sha !== process.env.BUILD_SHA", "run.conclusion !== 'success'",
+                         "git merge-base --is-ancestor $env:BUILD_SHA HEAD", "persist-credentials: false",
+                         "System.Management.Automation.Language.Parser", "repository: ongrowww/rustdesk-lab"):
+            self.assertIn(required, workflow)
+        self.assertNotIn("secrets.", workflow)
 
     def test_xml_components_deterministic_upgrade_ids_and_product_codes(self):
         first, second = self.tree(), self.tree(sequence=2)
@@ -286,8 +312,95 @@ class MsiTests(unittest.TestCase):
     def test_metadata_diagnostics_expose_only_field_names(self):
         expected = (101, 202, 3, 404, 505)
         actual = (909, 202, 8, 404, 606)
-        self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size,st_ctime_ns")
+        self.assertEqual(msi.differing_fields(expected, actual), "st_dev,st_size," + msi.SNAPSHOT_FIELDS[-1])
         self.assertEqual(msi.differing_fields(expected, expected), "")
+
+    def test_precise_snapshot_has_same_semantics_for_path_and_handle(self):
+        path = self.source / "LICENCE"
+        # Rewrite once before validation. On affected CPython Windows builds
+        # this makes path ctime (creation) differ from handle ctime (change).
+        path.write_bytes(b"updated fixture")
+        expected = msi.snapshot(path)
+        with path.open("rb") as stream:
+            self.assertEqual(msi.metadata_snapshot(os.fstat(stream.fileno())), expected)
+        self.assertEqual(msi.SNAPSHOT_FIELDS[-1], "st_birthtime_ns" if os.name == "nt" else "st_ctime_ns")
+        values = dict(zip(msi.SNAPSHOT_FIELDS, expected))
+        for field in msi.SNAPSHOT_FIELDS:
+            changed = {**values, field: values[field] + 1}
+            actual = msi.metadata_snapshot(types.SimpleNamespace(**changed))
+            self.assertNotEqual(actual, expected)
+            self.assertEqual(msi.differing_fields(expected, actual), field)
+        missing = {name: value for name, value in values.items() if name != msi.SNAPSHOT_FIELDS[-1]}
+        with self.assertRaisesRegex(ValueError, "precise filesystem metadata unavailable"):
+            msi.metadata_snapshot(types.SimpleNamespace(**missing))
+
+    def test_real_product_builds_package_verified_payload_without_installing(self):
+        root = Path(__file__).resolve().parents[1]
+        for workflow, role, label, sha in (
+            ("ongrow-lab-windows-x64.yml", "customer-desk", "Desk", "GITHUB_SHA"),
+            ("ongrow-support-console-windows-x64.yml", "support-console", "Console", "SOURCE_SHA")):
+            source = (root / ".github/workflows" / workflow).read_text()
+            package = source.split(f"- name: Package verified {label} as native MSI", 1)[1].split("      - name:", 1)[0]
+            self.assertLess(source.index("Unexpected ProductName"), source.index(f"Package verified {label} as native MSI"))
+            self.assertIn("dotnet-version: '8.0.408'", source)
+            self.assertIn("rollForward = 'disable'", package)
+            self.assertIn("RELEASE_SEQUENCE: ${{ github.run_number }}", package)
+            self.assertIn(f"--product {role} --sequence $env:RELEASE_SEQUENCE", package)
+            self.assertIn(f"--source-sha $env:{sha}", package)
+            self.assertIn("Copy-Item LICENCE $source", package)
+            self.assertIn("Copy-Item ongrow-build-provenance.txt $source", package)
+            self.assertIn("Get-FileHash $target -Algorithm SHA256", package)
+            for forbidden in ("--ci-probe", "--emit-only", "msiexec", "Start-Service", "install_ongrow", "secrets."):
+                self.assertNotIn(forbidden, package)
+
+    def test_guardian_diagnostic_is_bounded_enum_only_and_phase_aware(self):
+        script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")
+        diagnostic = script.split("function Get-GuardianDiagnostic(", 1)[1].split("function Throw-GuardianFailure(", 1)[0]
+        self.assertLess(diagnostic.index("if (-not $Guardian.Process.HasExited)"), diagnostic.index("$Guardian.Errors.Wait(1000)"))
+        self.assertIn("$diagnostic.Length -le 256", diagnostic)
+        self.assertIn("$diagnostic -cmatch $pattern", diagnostic)
+        self.assertIn("\\A(?:ONGROW_GUARDIAN_FAILURE phase=", diagnostic)
+        self.assertIn("(\\r?\\n)?\\z", diagnostic)
+        self.assertIn("return 'missing-diagnostic'", diagnostic)
+        self.assertNotIn("ReadToEnd", diagnostic)
+        self.assertNotIn("Write-", diagnostic)
+        failure = script.split("function Throw-GuardianFailure(", 1)[1].split("function Read-Guardian(", 1)[0]
+        self.assertIn("$Phase -notin @('bootstrap','read','session','transaction'", failure)
+        self.assertIn("$Phase = 'unknown'", failure)
+        self.assertIn("$Category = 'unknown'", failure)
+        self.assertIn("exit=$exit $diagnostic", failure)
+        controller = script.split("function Read-Guardian(", 1)[1].split("# Compile production schemas", 1)[0]
+        self.assertIn("$read.Wait(20000)", controller)
+        self.assertIn("Read-Guardian $guardian $false 'bootstrap'", controller)
+        self.assertIn("Read-Guardian $Guardian ($Operation -eq 'close') $Operation", controller)
+        self.assertNotIn("throw $_", controller)
+        self.assertNotIn("throw $read.Result", controller)
+        self.assertNotIn("throw $Guardian.Errors", controller)
+
+    def test_bootstrap_marker_regex_accepts_only_complete_fixed_fields(self):
+        from test_ongrow_native_apply import BOOTSTRAP_FIELDS, BootstrapFailure, report_guardian_failure
+        import contextlib
+        import io
+        script = (Path(__file__).parent / "test_ongrow_windows_msi_lifecycle.ps1").read_text(encoding="utf-8", errors="strict")
+        # Run the same enum/anchor regex over synthetic inputs. This is a source
+        # regression, not native PowerShell execution or MSI proof.
+        pattern = re.search(r"\$pattern = '([^']+)'", script).group(1).replace(r"\z", r"\Z")
+        diagnostic = {field: max(values, key=len) for field, values in BOOTSTRAP_FIELDS.items()}
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            report_guardian_failure("bootstrap", BootstrapFailure(diagnostic))
+        longest = output.getvalue()
+        self.assertLessEqual(len(longest), 256)
+        self.assertIsNotNone(re.fullmatch(pattern, longest))
+        for field, values in BOOTSTRAP_FIELDS.items():
+            for value in values:
+                self.assertIsNotNone(re.fullmatch(pattern, longest.replace(field + "=" + diagnostic[field], field + "=" + value)))
+        for malformed in (longest + longest, "raw-token " + longest, longest + "raw-token",
+                          longest.replace("phase=bootstrap", "phase=read"),
+                          longest.replace(" gate=MissingGate", ""),
+                          longest.replace(" reject=", " extra=unknown reject="),
+                          longest.replace(" owner=" + diagnostic["owner"], " owner=synthetic-token")):
+            self.assertIsNone(re.fullmatch(pattern, malformed))
 
     def test_native_optional_queries_keep_outer_array_and_preinstall_regression(self):
         script = Path(__file__).with_name("test_ongrow_windows_msi_lifecycle.ps1").read_text()

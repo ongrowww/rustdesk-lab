@@ -1,4 +1,6 @@
-//! Inactive, fixed-slot protected store. No acceptance advance, cleanup or apply.
+//! Fixed-slot protected store and signed attempt. No acceptance advance, cleanup or apply.
+#[path = "protected_store/attempt.rs"]
+mod attempt;
 use super::{
     manifest::{Channel, Platform, Product},
     runtime::{CheckOutcome, RuntimeError, RuntimePolicy, UpdateRuntime, VerifiedTransfer},
@@ -137,10 +139,12 @@ impl ProtectedStore {
         let lease = Arc::new(self.context.root.stage_lease()?);
         // Re-read after acquiring: partial or modified bootstrap remains unusable.
         self.snapshot()?;
-        match self.context.root.read(Child::Payload) {
-            Err(session_gate::Error::MissingGate) => {},
-            Err(error) => return Err(error.into()),
-            Ok(_) => return Err(Error::State),
+        for child in [Child::Payload, Child::Attempt] {
+            match self.context.root.read(child) {
+                Err(session_gate::Error::MissingGate) => {},
+                Err(error) => return Err(error.into()),
+                Ok(_) => return Err(Error::State),
+            }
         }
         Ok(PendingStage { writer: None,
             #[cfg(all(test, ongrow_update_store_probe))]
@@ -235,7 +239,8 @@ fn seal_job(input: WorkResult, transfer: VerifiedTransfer) -> impl FnOnce() -> R
             &input._context.identity.context(input._context.now()?, snapshot))?;
         hash_handle(&reader, &candidate)?;
         input._context.root.same(&reader, &input.identity)?;
-        Ok(SealedStageTicket { reader, identity: input.identity, context: input._context, _lease: input._lease,
+        let attempt = attempt::persist(&input._context, raw, signature)?;
+        Ok(SealedStageTicket { reader, attempt, identity: input.identity, context: input._context, _lease: input._lease,
             candidate, raw_manifest: raw.to_vec(), signature: *signature })
     }
 }
@@ -320,17 +325,20 @@ fn hash_handle(mut file: &File, candidate: &VerifiedCandidate) -> Result<(), Err
 
 /// A held read-only file plus lease, never installer authority or immutable bytes.
 pub(crate) struct SealedStageTicket {
-    reader: File, identity: FileIdentity, _lease: Arc<StageLease>, context: Arc<StoreContext>,
+    reader: File, attempt: attempt::StoredAttempt, identity: FileIdentity,
+    _lease: Arc<StageLease>, context: Arc<StoreContext>,
     candidate: VerifiedCandidate, raw_manifest: Vec<u8>, signature: [u8; 64],
 }
 impl SealedStageTicket {
     pub(crate) fn reverify(&mut self) -> Result<(), Error> {
+        self.attempt.matches(&self.context, &self.raw_manifest, &self.signature)?;
         self.context.root.same(&self.reader, &self.identity)?;
         let snapshot = self.context.snapshot()?;
         let candidate = verify_manifest(&self.raw_manifest, &self.signature, &self.context.identity.key,
             &self.context.identity.context(self.context.now()?, snapshot))?;
         hash_handle(&self.reader, &candidate)?;
         self.context.root.same(&self.reader, &self.identity)?;
+        self.attempt.matches(&self.context, &self.raw_manifest, &self.signature)?;
         Ok(())
     }
 }
