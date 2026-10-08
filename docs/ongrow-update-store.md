@@ -5,7 +5,8 @@ Bootstrap-API erwartet einen bereits vorhandenen, geschützten Produktroot.
 Sie erzeugt weder Verzeichnisse noch ACLs und repariert keine vorhandenen Dateien.
 Produkt, Schema-1-Plattform, Kanal, gebackene Sequenz, öffentlicher Schlüssel und
 HTTPS-Policy stammen gemeinsam aus der privaten vertrauenswürdigen Identität.
-Es gibt keine ENV-/GUI-Konfiguration, Acceptance-Advance- oder Recovery-API.
+Es gibt keine ENV-/GUI-Konfiguration oder Acceptance-Advance-API. Die unten
+beschriebene Wiederaufnahme prüft nur einen bestehenden Download.
 
 `accepted-sequence-v1` hat exakt 56 Bytes mit Version, Identität, Sequenz und
 SHA-256-Prüfsumme. Die Prüfsumme erkennt zufällige oder partielle Schäden, sie
@@ -16,7 +17,7 @@ ungültige Dateien blockieren Snapshot und Download vor jedem Request. Bootstrap
 ist ausschließlich erstmalig und überschreibt nichts. Ein Download oder Seal
 ändert die akzeptierte Sequenz nicht.
 
-Die drei neuen Namen sind feste interne Auswahlen. Manifestfilename und Caller
+Die vier Store-Namen sind feste interne Auswahlen. Manifestfilename und Caller
 liefern keine Pfadautorität. macOS öffnet relativ zum gehaltenen Root mit
 `openat` und `O_NOFOLLOW`; Windows hält die geprüften Vorfahren ohne Delete-Sharing
 und öffnet mit `OPEN_REPARSE_POINT`. Bestehende Gate-Prüffunktionen bleiben
@@ -30,7 +31,8 @@ Andere Snapshot-Handles dürfen deshalb Byte 0 lesen, während alle Stageprozess
 auf denselben Lockbereich konkurrieren. Siehe [LockFileEx-Vertrag](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
 
 `begin_stage` prüft gesunden Zustand, nimmt die Stagelease und weist vorhandene
-`stage-v1.payload` vor Netzwerk ab. Es erzeugt noch keine Datei. Der private
+`stage-v1.payload` oder `attempt-v1.signed` vor Netzwerk ab. Es erzeugt noch keine
+Datei. Der private
 AsyncWrite-Sink erzeugt sie ausschließlich beim ersten tatsächlichen Payloadwrite
 mit `create_new` oder `O_EXCL`. `NotDue`, authentifiziertes `NoUpdate` und reine
 Metadatenfehler lassen keinen Slot und senden keinen Payloadrequest.
@@ -61,10 +63,10 @@ unbenutzbar, statt fehlende Dateien nachzubauen.
 
 Es gibt keine produktive Löschung, weder bei Drop noch nach Seal, Cancel oder
 Fehler. Ein einmal erzeugter Slot bleibt belegt und untrusted bei Fehlern.
-Das begrenzt Dateiwachstum auf einen Slot, liefert aber noch keinen Retry- oder
-Recoveryvertrag. Der isolierte Harness entfernt nur seine eigenen temporären
-Fixtures. Ein Folgepaket muss Discard und persistente Recovery definieren, bevor
-Apps diese API aktivieren.
+Das begrenzt Dateiwachstum auf einen Slot. Die Wiederaufnahme eines vollständig
+signierten Downloads ist unten beschrieben. Discard beschädigter Slots und
+Recovery einer begonnenen Installation fehlen weiterhin. Der isolierte Harness
+entfernt nur seine eigenen temporären Fixtures.
 
 ## Native Prüfung und offene Grenzen
 
@@ -119,3 +121,33 @@ Tokio-Shutdown-Schedulings. Der gesonderte echte Creating-Cancel-Test bleibt bes
 
 Der Gesamtupdater bleibt unvollständig. Installer-Authority, Exclusive/Pending
 vor Prozessstop, Installer, Zielprozess, Health, Rollback und Aktivierung fehlen.
+## Dauerhaft gespeicherter signierter Download
+
+Nach Flush, erneuter Signaturprüfung und vollständiger Hashprüfung der Payload
+schreibt der Store `attempt-v1.signed`. Die größenbegrenzte Datei enthält nur
+Version, Länge, ursprüngliche Signatur und die exakten signierten Manifestbytes.
+Erstellung, Synchronisation und Read-only-Reopen verwenden die bestehenden
+nativen Root-, Owner-, ACL- und Linkprüfungen. Vorhandene oder partielle Dateien
+werden niemals ersetzt.
+
+`ProtectedStore::resume_stage` öffnet diese Datei und die feste Payload unter
+derselben prozessübergreifenden Stagelease erneut. Vertrauenswürdige
+Installationsidentität, frischer Sequenzzustand und aktuelle Zeit fließen in den
+ursprünglichen Signaturprüfer und die vollständige Payloadprüfung. Erst danach
+entsteht ein neues Sealed-Ticket. Es gibt keine HTTP-Requests. Auch eine spätere
+Ticketprüfung liest die gehaltene Manifestdatei erneut. Fehlende, beschädigte,
+abgelaufene oder wiederholte Updates sowie falsches Produkt, Schlüssel oder Kanal
+bleiben blockiert. Fehler ändern weder Dateien noch akzeptierten Zustand.
+
+Das ist Download-Wiederaufnahme, keine Installations-Recovery. Die API erzeugt
+keinen Root, startet keinen Installer, löscht kein Pending, bescheinigt keine
+Health, erhöht keine Sequenz und entfernt keine Dateien. App-/Dienst-Timer,
+Bootstrap, externer Installer-Guardian und authentifizierte Prüfung der neuen
+Installation sind vor Aktivierung des Autoinstallers weiterhin erforderlich.
+
+Der native Test führt die Wiederaufnahme in einem separaten Prozess aus, nachdem
+alle Downloadhandles geschlossen sind. Er prüft ausbleibende Requests und die
+weiterhin wirksame Sperre gegen andere Prozesse. Beschädigung, Ablauf, Replay,
+Identitätsabweichung, fehlende Dateien, Hardlinks, Symlinks beziehungsweise Reparse
+Points und Live-Mutation durch denselben Eigentümer werden ohne echte Zugangsdaten,
+App-Konfiguration oder Kundengeräte geprüft.

@@ -152,7 +152,7 @@ class SourceTests(unittest.TestCase):
     def test_private_fixed_identity_and_no_cleanup_or_authority(self):
         source = (ROOT / "src/ongrow_update/protected_store.rs").read_text(encoding="utf-8", errors="strict")
         handles = addition(ROOT / "src/ongrow_update/session_gate.rs", ORIGINAL["session_gate.rs"])
-        for name in ("accepted-sequence-v1", "staging-v1.lock", "stage-v1.payload"):
+        for name in ("accepted-sequence-v1", "staging-v1.lock", "stage-v1.payload", "attempt-v1.signed"):
             self.assertEqual(handles.count('"' + name + '"'), 1)
         for forbidden in ("remove_file", "remove_dir", "read_dir", "set_permissions", "std::env", "PathBuf",
                           "pub fn", "fn advance", "fn commit", "fn recover", "fn discard", "pub(crate) fn path"):
@@ -168,13 +168,33 @@ class SourceTests(unittest.TestCase):
         for field in ("writer: None", "identity: None", "work: None"):
             self.assertIn(field, initialization)
         before_download = source.split("fn begin_stage", 1)[1].split("pub(crate) async fn download", 1)[0]
-        self.assertIn("self.context.root.read(Child::Payload)", before_download)
+        self.assertIn("for child in [Child::Payload, Child::Attempt]", before_download)
+        self.assertIn("self.context.root.read(child)", before_download)
         self.assertNotIn("create(Child::Payload)", before_download)
         ticket = source.split("pub(crate) struct SealedStageTicket", 1)[1]
         for forbidden in ("pub(crate) reader:", "pub(crate) signature:", "fn write", "fn path", "fn construct"):
             self.assertNotIn(forbidden, ticket)
         mod = (ROOT / "src/ongrow_update/mod.rs").read_text(encoding="utf-8", errors="strict")
         self.assertIn('#[cfg(any(target_os = "macos", target_os = "windows"))]\npub(crate) mod protected_store;', mod)
+
+    def test_signed_attempt_is_bounded_and_never_installer_authority(self):
+        source = (ROOT / "src/ongrow_update/protected_store/attempt.rs").read_text(encoding="utf-8", errors="strict")
+        for required in ('b"OGATT1\\0\\0"', "HEADER_BYTES + super::super::MAX_MANIFEST_BYTES",
+                         "reader.take(MAX_BYTES as u64 + 1)", "bytes.len() != HEADER_BYTES + size",
+                         "context.root.create(Child::Attempt)", "context.root.sync_file(&writer)?",
+                         "context.root.sync_directory()?", "context.root.stage_lease()?",
+                         "verify_manifest(&raw_manifest, &signature, &context.identity.key",
+                         "hash_handle(&reader, &candidate)?", "context.identity.context(context.now()?, snapshot)",
+                         "tokio::task::spawn_blocking", "ticket.reverify()?"):
+            self.assertIn(required, source)
+        for forbidden in ("std::env", "PathBuf", "Command", "remove_file", "mark_ready", "mark_pending",
+                          "VerifiedHealth", "fn advance", "fn commit", "unwrap(", "expect(", "pub fn"):
+            self.assertNotIn(forbidden, source)
+        original = (ROOT / "src/ongrow_update/protected_store.rs").read_text(encoding="utf-8", errors="strict")
+        seal = original.split("fn seal_job", 1)[1].split("impl PendingStage", 1)[0]
+        self.assertLess(seal.index("hash_handle(&reader, &candidate)?"), seal.index("attempt::persist("))
+        self.assertIn("for child in [Child::Payload, Child::Attempt]", original)
+        self.assertEqual(original.count("self.attempt.matches("), 2)
 
     def test_actual_job_factories_whole_capture_and_ordered_guards(self):
         source = (ROOT / "src/ongrow_update/protected_store.rs").read_text(encoding="utf-8", errors="strict")
@@ -295,6 +315,7 @@ class NativeTests(unittest.TestCase):
                                         capture_output=True, encoding="utf-8", errors="strict", timeout=300)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("NATIVE_STORE_TLS_HANDLE_PASS", result.stdout)
+                self.assertIn("NATIVE_SIGNED_ATTEMPT_PROCESS_PASS", result.stdout)
                 self.assertNotIn("ignored", result.stdout.split("test result:", 1)[0])
                 print(result.stdout)
                 missing = environment.copy()
