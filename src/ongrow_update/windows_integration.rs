@@ -983,6 +983,9 @@ mod system_probe {
         ));
         drop(ready);
         eprintln!("SYSTEM_PROBE_PHASE:PENDING");
+        #[cfg(feature = "flutter")]
+        let transaction = crate::server::port_forward_mux::fixture_transaction_after_mux_teardown().await;
+        #[cfg(not(feature = "flutter"))]
         let transaction = session_gate::begin_installation().unwrap();
         assert!(apply_pending());
         assert!(matches!(

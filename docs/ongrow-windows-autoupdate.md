@@ -58,6 +58,20 @@ macOS update activation paths are separate.
 
 ## Guardian integration boundary
 
+## RustDesk 1.5.0 connection lifetimes
+
+The 1.5.0 identity handshake keeps its unauthenticated connection limits and
+receives the same earlier kernel admission lease. The connection retains a
+clone for its full lifetime. New multiplexed forwarding retains the lease in
+the controlling tunnel handle and in every controlled channel task; dropping
+the listener or mux owner cannot release admission before socket teardown.
+Test-only constructors without a lease are unavailable in product builds.
+The full desktop's disposable LocalSystem fixture checks Busy after the mux
+owner is dropped but before its queued child runs, then permits Pending only
+after that child has actually released its native lease.
+
+## Guardian integration boundary
+
 The disposable CI lifecycle drill separately identifies both MSI probe products
 and keeps the native Rust gate executable outside their installation roots.
 After v1 installation, only a fresh test gate is bootstrapped Ready. A real
