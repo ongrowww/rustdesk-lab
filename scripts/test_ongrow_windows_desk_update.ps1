@@ -77,6 +77,15 @@ if (-not $updated) {
     throw 'Actual scheduled Desk update did not complete; no forced transaction termination or cleanup'
 }
 if (-not $gui.HasExited) { throw 'Old GUI survived transactional replacement' }
+$reopened=$false
+$guiDeadline=[DateTime]::UtcNow.AddSeconds(30)
+do {
+    $windows=@(Get-CimInstance Win32_Process -Filter "Name='OnGROW Support Desk.exe'" | Where-Object { $_.ExecutablePath -eq $exe -and $_.CommandLine -notmatch '--(service|server|tray|cm)' })
+    if ($windows.Count -gt 0) { $reopened=$true;break }
+    Start-Sleep -Seconds 1
+} while ([DateTime]::UtcNow -lt $guiDeadline)
+if (-not $reopened) { throw 'Updated user GUI did not reopen after Ready' }
+
 foreach ($entry in $candidate.Descriptor.payload_sha256.PSObject.Properties) {
     $path = Join-Path $install $entry.Name
     Assert-NoRedirect $path

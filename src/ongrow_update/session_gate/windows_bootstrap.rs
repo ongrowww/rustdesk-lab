@@ -156,6 +156,8 @@ pub(crate) fn bootstrap_desk_root() -> Result<bool, Error> {
             }
             Err(error) => return Err(error),
         };
+        #[cfg(all(test, ongrow_session_gate_probe))]
+        eprintln!("ONGROW_BOOTSTRAP_CONTEXT:{}", if index==1 {"drive-root"} else if current==path {"product-root"} else if Some(current.as_path())==path.parent() {"company-parent"} else {"outer-ancestor"});
         inspect(&file, &user, Product::CustomerDesk, true, current != path)?;
         held.push(file);
     }

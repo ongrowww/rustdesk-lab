@@ -78,6 +78,7 @@ jobs:
             if (Test-Path $output) {
               foreach ($line in Get-Content -LiteralPath $output) {
                 if ($line -match '^SYSTEM_PROBE_PHASE:(SYSTEM|ROOT|STORE|GATE|STAGE|PENDING|CLEANUP)$') { Write-Output $line }
+                if ($line -match '^ONGROW_BOOTSTRAP_CONTEXT:(drive-root|product-root|company-parent|outer-ancestor)$') { Write-Output $line }
                 if ($line -match '^ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+$') { Write-Output $line }
                 if ($line -match 'called .*unwrap.*Err.*(Untrusted|Disabled|State|Io)') { Write-Output ('SYSTEM_PROBE_REJECT='+$Matches[1]) }
               }
