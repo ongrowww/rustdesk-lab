@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 20
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      RUSTFLAGS: --cfg ongrow_windows_integration
+      RUSTFLAGS: --cfg ongrow_windows_integration -C target-feature=+crt-static
       ONGROW_PRODUCT_ROLE: customer-desk
       ONGROW_WINDOWS_UPDATER: v1
       ONGROW_UPDATE_SESSION_GATE: v1
@@ -49,6 +49,8 @@ jobs:
         run: |
           $binaries=@(Get-ChildItem tools/windows-update-guardian/target/debug/deps/ongrow_windows_update_guardian-*.exe)
           if ($binaries.Count -ne 1) { throw 'Exact native test executable required' }
+          $cases=& $binaries[0].FullName --list | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not $cases.Contains('ongrow_update::windows_integration::system_probe::protected_desk_bootstrap_staging_and_pending: test')) { throw 'Native System test was not compiled' }
           $directory=Join-Path $env:RUNNER_TEMP 'ongrow-system-updater-test'
           New-Item -ItemType Directory -Path $directory | Out-Null
           $output=Join-Path $directory 'result.txt'

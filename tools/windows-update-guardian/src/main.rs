@@ -1,5 +1,5 @@
 //! Independent, console-free Desk installer guardian. No Flutter or mutable config.
-#![cfg_attr(windows, windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 #![allow(dead_code)]
 pub extern crate libc;
 extern crate self as hbb_common;

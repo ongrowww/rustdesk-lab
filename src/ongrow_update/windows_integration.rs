@@ -929,9 +929,9 @@ fn verify_installed_payload(sequence: u64, source: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod system_probe {
     use super::*;
-    #[test]
+    #[tokio::test(flavor = "current_thread")]
     #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
-    fn protected_desk_bootstrap_staging_and_pending() {
+    async fn protected_desk_bootstrap_staging_and_pending() {
         assert_eq!(
             std::env::var("ONGROW_WINDOWS_SYSTEM_PROBE").as_deref(),
             Ok("approved-disposable-runner")
