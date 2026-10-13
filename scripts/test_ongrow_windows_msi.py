@@ -101,8 +101,10 @@ class MsiTests(unittest.TestCase):
                           "Disable-NetFirewall", "VerifiedHealth", "commit_healthy", "--update"):
             self.assertNotIn(forbidden, script)
         for required in ("contents: read", "actions: read", "runs-on: windows-2022",
-                         "BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653",
-                         "ongrow-support-desk-msi-12-windows-x64", "ongrow-support-console-msi-36-windows-x64",
+                         "BUILD_SHA: ${{ matrix.build_sha }}",
+                         "build_sha: 6abdaf967a9d9e34be35782f07f82ddfd6642366",
+                         "build_sha: ad23f1a7d909237e15c893642f14e7f9d236db5e",
+                         "ongrow-support-desk-msi-16-windows-x64", "ongrow-support-console-msi-45-windows-x64",
                          "run.head_repository.full_name !== run.repository.full_name",
                          "run.head_sha !== process.env.BUILD_SHA", "run.conclusion !== 'success'",
                          "git merge-base --is-ancestor $env:BUILD_SHA HEAD", "persist-credentials: false",
