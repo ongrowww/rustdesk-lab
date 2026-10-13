@@ -252,7 +252,7 @@ class SourceTests(unittest.TestCase):
         runtime = (ROOT / ".github/workflows/ongrow-update-runtime-lab.yml").read_text(encoding="utf-8", errors="strict")
         self.assertIn("python scripts/test_ongrow_update_session_gate.py", runtime)
         self.assertIn("python scripts/test_ongrow_update_store.py --source-only", runtime)
-        self.assertIn('git diff --exit-code a620d13809b94cc2baa06bf77a4a741769ef413f "$SOURCE_SHA"', runtime)
+        self.assertIn('git diff --exit-code cbfdf20b9b67fe336185d8cb66bfa6c141819260 "$SOURCE_SHA"', runtime)
         for active in (workflow, runtime):
             paths = active.split("    paths:\n", 1)[1].split("\npermissions:", 1)[0]
             self.assertIn("      - '.gitattributes'\n", paths)
