@@ -400,7 +400,7 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
         Err(error) => return Err(error.into()),
     };
     let mut ticket = if let Some(ref transaction) = recovery {
-        match store.resume_stage_recovery(transaction).await.await {
+        match store.resume_stage_recovery(transaction).await {
             Ok(ticket) => ticket,
             Err(protected_store::Error::Trust(session_gate::Error::MissingGate)) => {
                 // Crash after committed sequence/slot cleanup but before Ready.

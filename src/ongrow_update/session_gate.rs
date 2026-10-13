@@ -116,10 +116,12 @@ pub(crate) mod store_handles {
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub(crate) enum Child { Sequence, StageLock, Payload, Attempt,
+// ONGROW_WINDOWS_CHILDREN_BEGIN
         #[cfg(target_os = "windows")] Health,
         #[cfg(target_os = "windows")] Guardian,
         #[cfg(target_os = "windows")] Installer,
         #[cfg(target_os = "windows")] SequenceNext,
+// ONGROW_WINDOWS_CHILDREN_END
     }
     impl Child {
         pub(super) fn name(self) -> &'static str {
@@ -128,10 +130,12 @@ pub(crate) mod store_handles {
                 Self::StageLock => "staging-v1.lock",
                 Self::Payload => "stage-v1.payload",
                 Self::Attempt => "attempt-v1.signed",
+// ONGROW_WINDOWS_NAMES_BEGIN
                 #[cfg(target_os = "windows")] Self::Health => "service-health-v1",
                 #[cfg(target_os = "windows")] Self::Guardian => "update-guardian-v1.exe",
                 #[cfg(target_os = "windows")] Self::Installer => "installer-v1.msi",
                 #[cfg(target_os = "windows")] Self::SequenceNext => "accepted-sequence-v1.next",
+// ONGROW_WINDOWS_NAMES_END
             }
         }
     }
@@ -154,12 +158,14 @@ pub(crate) mod store_handles {
         }
         pub(crate) fn sync_file(&self, file: &File) -> Result<(), Error> { self.inner.sync_file(file) }
         pub(crate) fn sync_directory(&self) -> Result<(), Error> { self.inner.sync_directory() }
+// ONGROW_WINDOWS_HANDLES_BEGIN
         #[cfg(target_os = "windows")]
         pub(crate) fn path(&self, child: Child) -> std::path::PathBuf { self.inner.path(child) }
         #[cfg(target_os = "windows")]
         pub(crate) fn replace(&self, child: Child, bytes: &[u8]) -> Result<(), Error> { self.inner.replace(child, bytes) }
         #[cfg(target_os = "windows")]
         pub(crate) fn remove(&self, child: Child) -> Result<(), Error> { self.inner.remove(child) }
+// ONGROW_WINDOWS_HANDLES_END
         pub(crate) fn stage_lease(&self) -> Result<StageLease, Error> {
             Ok(StageLease { _inner: self.inner.stage_lease()? })
         }
@@ -199,6 +205,7 @@ mod pending_recovery_tests;
 #[cfg(all(test, ongrow_native_apply_probe, any(target_os = "macos", target_os = "windows")))]
 #[path = "native_apply_tests.rs"]
 mod native_apply_tests;
+// ONGROW_WINDOWS_APPLY_BEGIN
 #[cfg(target_os = "windows")]
 pub(crate) mod windows_bootstrap {
     use super::*;
@@ -219,4 +226,5 @@ impl Transaction {
         self.commit_healthy(VerifiedHealth(()))
     }
 }
+// ONGROW_WINDOWS_APPLY_END
 // ONGROW_STORE_ADDITIONS_END

@@ -7,14 +7,14 @@ impl SealedStageTicket {
     pub(crate) fn manifest(&self) -> &super::super::manifest::Manifest {
         self.candidate.manifest()
     }
-    fn recovery_context<'a>(&'a self, mut context: Context<'a>) -> Result<Context<'a>, Error> {
+    pub(super) fn recovery_context<'a>(&'a self, mut context: Context<'a>) -> Result<Context<'a>, Error> {
         // Only resume_stage_recovery, which requires a held Pending Transaction,
         // constructs recovery tickets. Signature/context/time remain unchanged.
         context.baked_current_sequence = 0;
         context.last_accepted_sequence = LastAcceptedSequence::Known(0);
         Ok(context)
     }
-    fn require_recovery_sequence(&self, candidate: &VerifiedCandidate) -> Result<(), Error> {
+    pub(super) fn require_recovery_sequence(&self, candidate: &VerifiedCandidate) -> Result<(), Error> {
         let accepted = match self.context.snapshot()?.state {
             LastAcceptedSequence::Known(s) => s,
             _ => return Err(Error::State),
