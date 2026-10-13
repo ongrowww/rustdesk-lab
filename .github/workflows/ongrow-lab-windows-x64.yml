@@ -285,6 +285,7 @@ jobs:
       - name: Run OnGROW Rust tests
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           python scripts/test_ongrow_ci_isolation.py
           cargo test --locked --lib --features flutter ongrow_ci
           cargo test --locked --lib --features flutter ongrow_control

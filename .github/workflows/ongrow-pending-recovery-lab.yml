@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          git diff --exit-code cbfdf20b9b67fe336185d8cb66bfa6c141819260 "$SOURCE_SHA" -- . \
+          git diff --exit-code e279d4e7490e7347ab1aab279052d5362e9eeba3 "$SOURCE_SHA" -- . \
             ':(exclude).gitattributes' \
             ':(exclude).github/workflows/ongrow-update-store-lab.yml' \
             ':(exclude).github/workflows/ongrow-update-runtime-lab.yml' \
