@@ -104,10 +104,10 @@ def strip_windows_extension(block, name):
         if stop<=start:raise AssertionError("Ordered Windows integration markers required")
         content=block[start+len(begin):stop]
         if marker=="CHILDREN":
-            expected="".join('        #[cfg(target_os = "windows")] '+name+',\n' for name in ("Health","Guardian","Installer","SequenceNext"))
+            expected="".join('        #[cfg(target_os = "windows")] '+name+',\n' for name in ("Health","Guardian","Installer","SequenceNext","NativeState","NativeNext"))
             if content!=expected:raise AssertionError("Exact Windows fixed children required")
         if marker=="NAMES":
-            expected="".join('                #[cfg(target_os = "windows")] Self::'+name+' => "'+value+'",\n' for name,value in (("Health","service-health-v1"),("Guardian","update-guardian-v1.exe"),("Installer","installer-v1.msi"),("SequenceNext","accepted-sequence-v1.next")))
+            expected="".join('                #[cfg(target_os = "windows")] Self::'+name+' => "'+value+'",\n' for name,value in (("Health","service-health-v1"),("Guardian","update-guardian-v1.exe"),("Installer","installer-v1.msi"),("SequenceNext","accepted-sequence-v1.next"),("NativeState","native-attempt-v1"),("NativeNext","native-attempt-v1.next")))
             if content!=expected:raise AssertionError("Exact Windows fixed child names required")
         block=block[:start]+block[stop+len(end):]
     if name=="session_gate.rs":

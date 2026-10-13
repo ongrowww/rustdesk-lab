@@ -26,7 +26,11 @@ itself in its own session when the protected Pending journal appears. A separate
 user helper waits outside the replacement tree and reopens the GUI/tray only
 after Ready. The service defers server relaunch while Pending; the guardian
 checks actual old process handles have exited before native installation. MSI timeout never kills a native
-transaction or opens admission.
+transaction or opens admission. A durable native-attempt record is flushed
+before launch and atomically replaced with the known caller exit before health
+can commit. A Started/partial/unknown record remains Pending after guardian
+loss; neither a PID, mutex observation nor a newly running service substitutes
+for known completion. This uncertain case needs explicit operator recovery.
 
 Health requires the SCM's running service PID, its process creation time,
 installed executable path, protected executable/core files and the service's

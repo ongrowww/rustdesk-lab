@@ -169,7 +169,10 @@ impl ProtectedRoot {
     pub(crate) fn replace(&self, child: Child, bytes: &[u8]) -> Result<(), Error> {
         require_system()?;
         if child == Child::Sequence {
-            return self.replace_sequence(bytes);
+            return self.replace_record(Child::Sequence, Child::SequenceNext, 56, bytes);
+        }
+        if child == Child::NativeState {
+            return self.replace_record(Child::NativeState, Child::NativeNext, 160, bytes);
         }
         if !matches!(child, Child::Health) {
             return Err(Error::Untrusted);
@@ -197,25 +200,31 @@ impl ProtectedRoot {
         file.set_len(bytes.len() as u64).map_err(|_| Error::Io)?;
         self.sync_file(&file)
     }
-    fn replace_sequence(&self, bytes: &[u8]) -> Result<(), Error> {
-        if bytes.len() != 56 {
+    fn replace_record(
+        &self,
+        child: Child,
+        next_child: Child,
+        size: usize,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        if bytes.len() != size {
             return Err(Error::Untrusted);
         }
-        let current = self.read(Child::Sequence)?;
+        let current = self.read(child)?;
         self.identity(&current)?;
-        let next = match self.create(Child::SequenceNext) {
+        let next = match self.create(next_child) {
             Ok(mut writer) => {
                 writer.write_all(bytes).map_err(|_| Error::Io)?;
                 self.sync_file(&writer)?;
                 drop(writer);
-                self.read(Child::SequenceNext)?
+                self.read(next_child)?
             }
             Err(_) => {
-                let mut next = self.read(Child::SequenceNext)?;
-                if next.metadata().map_err(|_| Error::Io)?.len() != 56 {
+                let mut next = self.read(next_child)?;
+                if next.metadata().map_err(|_| Error::Io)?.len() != size as u64 {
                     return Err(Error::Untrusted);
                 }
-                let mut stored = [0; 56];
+                let mut stored = vec![0; size];
                 next.read_exact(&mut stored).map_err(|_| Error::Io)?;
                 if stored != bytes {
                     return Err(Error::Untrusted);
@@ -229,15 +238,15 @@ impl ProtectedRoot {
         // Same-directory atomic replacement, flushed before any Ready marker.
         unsafe {
             windows::Win32::Storage::FileSystem::MoveFileExW(
-                PCWSTR(wide(&self.path(Child::SequenceNext)).as_ptr()),
-                PCWSTR(wide(&self.path(Child::Sequence)).as_ptr()),
+                PCWSTR(wide(&self.path(next_child)).as_ptr()),
+                PCWSTR(wide(&self.path(child)).as_ptr()),
                 windows::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
                     | windows::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
             )
         }
         .map_err(|_| Error::Io)?;
-        let mut committed = self.read(Child::Sequence)?;
-        let mut stored = [0; 56];
+        let mut committed = self.read(child)?;
+        let mut stored = vec![0; size];
         committed.read_exact(&mut stored).map_err(|_| Error::Io)?;
         if stored != bytes {
             return Err(Error::Untrusted);
@@ -248,7 +257,12 @@ impl ProtectedRoot {
         require_system()?;
         if !matches!(
             child,
-            Child::Payload | Child::Attempt | Child::Guardian | Child::Installer
+            Child::Payload
+                | Child::Attempt
+                | Child::Guardian
+                | Child::Installer
+                | Child::NativeState
+                | Child::NativeNext
         ) {
             return Err(Error::Untrusted);
         }

@@ -411,6 +411,27 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
                 if !matches!(accepted,LastAcceptedSequence::Known(s) if s==policy.sequence) {
                     return Err(Error::Store);
                 }
+                match root.read(Child::NativeState) {
+                    Ok(file) => {
+                        let record = read_native_record(file)?;
+                        let code = u32::from_be_bytes(
+                            record[124..128].try_into().map_err(|_| Error::Installer)?,
+                        );
+                        let target = u64::from_be_bytes(
+                            record[8..16].try_into().map_err(|_| Error::Installer)?,
+                        );
+                        if record[120] != 2
+                            || code == u32::MAX
+                            || ((code == 0 || code == 3010)
+                                && (target != policy.sequence
+                                    || record[16..56] != *policy.source.as_bytes()))
+                        {
+                            return Err(Error::Installer);
+                        }
+                    }
+                    Err(session_gate::Error::MissingGate) => {}
+                    Err(error) => return Err(error.into()),
+                }
                 let health = HealthyService::verify(&root, policy.sequence, &policy.source)?;
                 store.cleanup_committed(&health)?;
                 recovery.ok_or(Error::Trust)?.finish_windows(health)?;
@@ -440,6 +461,18 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
     };
     let sequence = ticket.manifest().release_sequence;
     let source = ticket.manifest().source_sha.clone();
+    if recovery.is_none() {
+        let validation = ticket
+            .installer_path()
+            .map_err(Error::from)
+            .and_then(|path| validate_msi(&path, sequence));
+        if let Err(error) = validation {
+            let ready = session_gate::admit()?;
+            drop(ticket);
+            store.discard_ready(&ready)?;
+            return Err(error);
+        }
+    }
     let transaction = match recovery {
         Some(t) => t,
         None => match session_gate::begin_installation() {
@@ -449,17 +482,24 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
         },
     };
     ticket.reverify()?;
-    // If a crash happened after native commit, authentic loaded health wins;
-    // never repeat MSI merely because its previous caller disappeared.
-    let health = match HealthyService::verify(&root, sequence, &source) {
-        Ok(health) => health,
-        Err(_) => {
-            // The signed ticket remains held, denying write/replace of MSI bytes.
+    // A surviving native installer is not quiescent just because the guardian
+    // died or a new service already started. Only durable caller completion
+    // permits recovery to commit health; Started/partial records stay Pending.
+    let native = native_result(&root, ticket.manifest())?;
+    let code = match native {
+        Some(code) => code,
+        None => {
             let executable = session_gate::windows_bootstrap::system_executable("msiexec.exe")?;
             let payload = ticket.installer_path()?;
             validate_msi(&payload, sequence)?;
             quiesce_apps().await?;
-            let mut child = Command::new(executable)
+            let mut started = root.create(Child::NativeState)?;
+            started
+                .write_all(&native_record(ticket.manifest(), None))
+                .map_err(|_| Error::Io)?;
+            root.sync_file(&started)?;
+            drop(started);
+            let launch = Command::new(executable)
                 .arg("/i")
                 .arg(payload)
                 .args(["/qn", "/norestart", "REBOOT=ReallySuppress"])
@@ -467,49 +507,62 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .spawn()
-                .map_err(|_| Error::Installer)?;
-            let started = Instant::now();
+                .spawn();
+            let mut child = match launch {
+                Ok(child) => child,
+                Err(_) => {
+                    // No child exists on a failed CreateProcess. Record this
+                    // known non-start so authentic previous health may recover.
+                    root.replace(
+                        Child::NativeState,
+                        &native_record(ticket.manifest(), Some(1603)),
+                    )?;
+                    return Err(Error::Installer);
+                }
+            };
+            let began = Instant::now();
             let code = loop {
                 match child.try_wait().map_err(|_| Error::Installer)? {
-                    Some(exit) => break exit.code().ok_or(Error::Installer)?,
+                    Some(exit) => {
+                        break u32::try_from(exit.code().ok_or(Error::Installer)?)
+                            .map_err(|_| Error::Installer)?
+                    }
                     None => {}
                 }
-                if started.elapsed() >= Duration::from_secs(600) {
+                if began.elapsed() >= Duration::from_secs(600) {
                     return Err(Error::Installer);
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             };
-            if code != 0 && code != 3010 {
-                // Caller exit is known here; timeouts/pipe loss never enter this
-                // path. Only the authentic previous service AND every old
-                // owned payload hash can prove the native rollback restored it.
-                let started = Instant::now();
-                loop {
-                    if let Ok(previous) =
-                        HealthyService::verify(&root, policy.sequence, &policy.source)
-                    {
-                        store.rollback_windows(ticket, &previous)?;
-                        transaction.finish_windows(previous)?;
-                        return Ok(1);
-                    }
-                    if started.elapsed() >= Duration::from_secs(120) {
-                        return Err(Error::Installer);
-                    }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-            let started = Instant::now();
-            loop {
-                if let Ok(health) = HealthyService::verify(&root, sequence, &source) {
-                    break health;
-                }
-                if started.elapsed() >= Duration::from_secs(120) {
-                    return Err(Error::Health);
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
+            root.replace(
+                Child::NativeState,
+                &native_record(ticket.manifest(), Some(code)),
+            )?;
+            code
         }
+    };
+    let started = Instant::now();
+    if code != 0 && code != 3010 {
+        loop {
+            if let Ok(previous) = HealthyService::verify(&root, policy.sequence, &policy.source) {
+                store.rollback_windows(ticket, &previous)?;
+                transaction.finish_windows(previous)?;
+                return Ok(1);
+            }
+            if started.elapsed() >= Duration::from_secs(120) {
+                return Err(Error::Installer);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    let health = loop {
+        if let Ok(health) = HealthyService::verify(&root, sequence, &source) {
+            break health;
+        }
+        if started.elapsed() >= Duration::from_secs(120) {
+            return Err(Error::Health);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     };
     if health.sequence != sequence {
         return Err(Error::Health);
@@ -883,7 +936,9 @@ mod system_probe {
             std::env::var("ONGROW_WINDOWS_SYSTEM_PROBE").as_deref(),
             Ok("approved-disposable-runner")
         );
+        eprintln!("SYSTEM_PROBE_PHASE:SYSTEM");
         session_gate::windows_bootstrap::system().unwrap();
+        eprintln!("SYSTEM_PROBE_PHASE:ROOT");
         assert!(
             session_gate::windows_bootstrap::root().unwrap(),
             "Fixture must be a fresh root"
@@ -898,7 +953,9 @@ mod system_probe {
             "/lab/",
         )
         .unwrap();
+        eprintln!("SYSTEM_PROBE_PHASE:STORE");
         let store = ProtectedStore::bootstrap(identity).unwrap();
+        eprintln!("SYSTEM_PROBE_PHASE:GATE");
         session_gate::initialize().unwrap();
         let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
         assert!(matches!(
@@ -910,6 +967,7 @@ mod system_probe {
             session_gate::begin_installation(),
             Err(session_gate::Error::Busy)
         ));
+        eprintln!("SYSTEM_PROBE_PHASE:STAGE");
         let mut scratch = root.create(Child::Payload).unwrap();
         scratch.write_all(b"unsealed fixture").unwrap();
         root.sync_file(&scratch).unwrap();
@@ -924,6 +982,7 @@ mod system_probe {
             Err(session_gate::Error::MissingGate)
         ));
         drop(ready);
+        eprintln!("SYSTEM_PROBE_PHASE:PENDING");
         let transaction = session_gate::begin_installation().unwrap();
         assert!(apply_pending());
         assert!(matches!(
@@ -939,6 +998,7 @@ mod system_probe {
         assert!(apply_pending());
         // Dispose only this freshly created synthetic root, after all handles
         // close. No production cleanup/reset API gains gate/state authority.
+        eprintln!("SYSTEM_PROBE_PHASE:CLEANUP");
         let path = root.path(Child::StageLock).parent().unwrap().to_owned();
         drop(root);
         drop(store);
@@ -953,4 +1013,50 @@ mod system_probe {
         std::fs::remove_dir(path).unwrap();
         println!("NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS");
     }
+}
+
+fn native_record(manifest: &super::manifest::Manifest, code: Option<u32>) -> [u8; 160] {
+    let mut record = [0; 160];
+    record[..8].copy_from_slice(b"OGNAT1\0\0");
+    record[8..16].copy_from_slice(&manifest.release_sequence.to_be_bytes());
+    record[16..56].copy_from_slice(manifest.source_sha.as_bytes());
+    record[56..120].copy_from_slice(manifest.sha256.as_bytes());
+    record[120] = if code.is_some() { 2 } else { 1 };
+    record[124..128].copy_from_slice(&code.unwrap_or(u32::MAX).to_be_bytes());
+    let digest = Sha256::digest(&record[..128]);
+    record[128..].copy_from_slice(&digest);
+    record
+}
+fn read_native_record(mut file: File) -> Result<[u8; 160], Error> {
+    if file.metadata().map_err(|_| Error::Installer)?.len() != 160 {
+        return Err(Error::Installer);
+    }
+    let mut record = [0; 160];
+    file.read_exact(&mut record).map_err(|_| Error::Installer)?;
+    if record[..8] != *b"OGNAT1\0\0"
+        || record[128..] != Sha256::digest(&record[..128])[..]
+        || !matches!(record[120], 1 | 2)
+        || record[121..124] != [0; 3]
+    {
+        return Err(Error::Installer);
+    }
+    Ok(record)
+}
+fn native_result(
+    root: &ProtectedRoot,
+    manifest: &super::manifest::Manifest,
+) -> Result<Option<u32>, Error> {
+    let record = match root.read(Child::NativeState) {
+        Ok(file) => read_native_record(file)?,
+        Err(session_gate::Error::MissingGate) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if record[120] != 2 {
+        return Err(Error::Installer);
+    }
+    let code = u32::from_be_bytes(record[124..128].try_into().map_err(|_| Error::Installer)?);
+    if code == u32::MAX || record != native_record(manifest, Some(code)) {
+        return Err(Error::Installer);
+    }
+    Ok(Some(code))
 }

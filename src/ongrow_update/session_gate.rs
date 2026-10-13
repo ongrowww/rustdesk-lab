@@ -121,6 +121,8 @@ pub(crate) mod store_handles {
         #[cfg(target_os = "windows")] Guardian,
         #[cfg(target_os = "windows")] Installer,
         #[cfg(target_os = "windows")] SequenceNext,
+        #[cfg(target_os = "windows")] NativeState,
+        #[cfg(target_os = "windows")] NativeNext,
 // ONGROW_WINDOWS_CHILDREN_END
     }
     impl Child {
@@ -135,6 +137,8 @@ pub(crate) mod store_handles {
                 #[cfg(target_os = "windows")] Self::Guardian => "update-guardian-v1.exe",
                 #[cfg(target_os = "windows")] Self::Installer => "installer-v1.msi",
                 #[cfg(target_os = "windows")] Self::SequenceNext => "accepted-sequence-v1.next",
+                #[cfg(target_os = "windows")] Self::NativeState => "native-attempt-v1",
+                #[cfg(target_os = "windows")] Self::NativeNext => "native-attempt-v1.next",
 // ONGROW_WINDOWS_NAMES_END
             }
         }

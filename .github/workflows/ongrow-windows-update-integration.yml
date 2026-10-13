@@ -71,6 +71,15 @@ jobs:
             $info=Get-ScheduledTaskInfo -TaskName $task
             $state=(Get-ScheduledTask -TaskName $task).State
           } while (($state -eq 'Running' -or $info.LastRunTime.Year -lt 2020) -and [DateTime]::UtcNow -lt $deadline)
-          if ($state -eq 'Running' -or $info.LastTaskResult -ne 0 -or -not (Test-Path $output) -or -not (Select-String -LiteralPath $output -SimpleMatch 'NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS' -Quiet)) { throw 'Native LocalSystem updater bootstrap failed; runner state retained' }
+          if ($state -eq 'Running' -or $info.LastTaskResult -ne 0 -or -not (Test-Path $output) -or -not (Select-String -LiteralPath $output -SimpleMatch 'NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS' -Quiet)) {
+            Write-Output ('SYSTEM_TASK_EXIT='+$info.LastTaskResult)
+            if (Test-Path $output) {
+              foreach ($line in Get-Content -LiteralPath $output) {
+                if ($line -match '^SYSTEM_PROBE_PHASE:(SYSTEM|ROOT|STORE|GATE|STAGE|PENDING|CLEANUP)$') { Write-Output $line }
+                if ($line -match 'called .*unwrap.*Err.*(Untrusted|Disabled|State|Io)') { Write-Output ('SYSTEM_PROBE_REJECT='+$Matches[1]) }
+              }
+            } else { Write-Output 'SYSTEM_PROBE_NO_OUTPUT' }
+            throw 'Native LocalSystem updater bootstrap failed; runner state retained'
+          }
           Unregister-ScheduledTask -TaskName $task -Confirm:$false
           Write-Output 'NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS'

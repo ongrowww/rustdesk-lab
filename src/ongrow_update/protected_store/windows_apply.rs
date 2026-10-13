@@ -162,7 +162,13 @@ impl ProtectedStore {
         Ok(())
     }
     fn cleanup_slots(&self) -> Result<(), Error> {
-        for child in [Child::Installer, Child::Payload, Child::Attempt] {
+        for child in [
+            Child::Installer,
+            Child::Payload,
+            Child::Attempt,
+            Child::NativeNext,
+            Child::NativeState,
+        ] {
             match self.context.root.read(child) {
                 Ok(file) => {
                     drop(file);
