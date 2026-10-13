@@ -5,9 +5,9 @@ const MAGIC: &[u8; 8] = b"OGATT1\0\0";
 const HEADER_BYTES: usize = 8 + 4 + 64;
 const MAX_BYTES: usize = HEADER_BYTES + super::super::MAX_MANIFEST_BYTES;
 
-pub(super) struct StoredAttempt { reader: File, identity: FileIdentity }
+pub(super) struct StoredAttempt { pub(super) reader: File, identity: FileIdentity }
 
-fn decode(mut reader: &File) -> Result<(Vec<u8>, [u8; 64]), Error> {
+pub(super) fn decode(mut reader: &File) -> Result<(Vec<u8>, [u8; 64]), Error> {
     let length = reader.metadata().map_err(|_| Error::Io)?.len();
     if length <= HEADER_BYTES as u64 || length > MAX_BYTES as u64 { return Err(Error::State); }
     reader.seek(SeekFrom::Start(0)).map_err(|_| Error::Io)?;
@@ -25,7 +25,7 @@ fn decode(mut reader: &File) -> Result<(Vec<u8>, [u8; 64]), Error> {
 }
 
 impl StoredAttempt {
-    fn open(context: &StoreContext) -> Result<Self, Error> {
+    pub(super) fn open(context: &StoreContext) -> Result<Self, Error> {
         let reader = context.root.read(Child::Attempt)?;
         let identity = context.root.identity(&reader)?;
         Ok(Self { reader, identity })
@@ -79,7 +79,9 @@ impl ProtectedStore {
             context.root.same(&reader, &identity)?;
             attempt.matches(&context, &raw_manifest, &signature)?;
             let mut ticket = SealedStageTicket { reader, attempt, identity, _lease: lease, context,
-                candidate, raw_manifest, signature };
+                candidate, raw_manifest, signature,
+                #[cfg(all(target_os = "windows", ongrow_windows_integration))] recovery: false,
+                #[cfg(all(target_os = "windows", ongrow_windows_integration))] installer: None };
             ticket.reverify()?;
             Ok(ticket)
         }).await.map_err(|_| Error::Io)?

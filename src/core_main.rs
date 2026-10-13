@@ -86,6 +86,17 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    #[cfg(all(windows, ongrow_windows_integration))]
+    {
+        use crate::ongrow_update::windows_integration::{start_process_watcher, Restart};
+        let mode = if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) { Some(Some(Restart::Gui)) }
+            else { match args[0].as_str() { "--tray" => Some(Some(Restart::Tray)), "--server" | "--cm" | "--cm-no-ui" => Some(None), _ => None } };
+        if let Some(restart) = mode {
+            if let Err(error) = start_process_watcher(restart, crate::platform::quit_gui) {
+                log::error!("OnGROW update watcher could not start: {:?}", error);
+            }
+        }
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
         #[cfg(target_os = "linux")]

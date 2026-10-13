@@ -449,6 +449,10 @@ fn directory(path: &Path, user: &User, product: Product) -> Result<Vec<File>, Er
     Ok(held)
 }
 fn root(product: Product) -> Result<PathBuf, Error> {
+    // ONGROW_WINDOWS_ROOT_BEGIN
+    #[cfg(ongrow_windows_integration)]
+    if product == Product::CustomerDesk { return bootstrap::desk_update_root(); }
+    // ONGROW_WINDOWS_ROOT_END
     let id = if product == Product::CustomerDesk { &FOLDERID_ProgramData } else { &FOLDERID_LocalAppData };
     let pointer = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.map_err(|_| Error::Untrusted)?;
     let value = unsafe { pointer.to_string() }.map_err(|_| Error::Untrusted);
@@ -615,4 +619,9 @@ impl Lock {
         Ok(())
     }
 }
+// ONGROW_WINDOWS_BOOTSTRAP_BEGIN
+#[path = "windows_bootstrap.rs"]
+mod bootstrap;
+pub(super) use bootstrap::{require_system, bootstrap_desk_root, installed_file, desk_installation, system_executable, pending, installed_payload_file};
+// ONGROW_WINDOWS_BOOTSTRAP_END
 // ONGROW_STORE_ADDITIONS_END

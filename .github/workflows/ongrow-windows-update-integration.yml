@@ -1,0 +1,89 @@
+name: OnGROW Windows updater integration
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/ongrow_update/**'
+      - 'tools/windows-update-guardian/**'
+      - 'scripts/*ongrow_windows_update*'
+      - '.github/workflows/ongrow-windows-update-integration.yml'
+permissions:
+  contents: read
+jobs:
+  windows-guardian:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUSTFLAGS: --cfg ongrow_windows_integration --cfg ongrow_session_gate_probe -C target-feature=+crt-static
+      ONGROW_PRODUCT_ROLE: customer-desk
+      ONGROW_WINDOWS_UPDATER: v1
+      ONGROW_UPDATE_SESSION_GATE: v1
+      ONGROW_RELEASE_SEQUENCE: '1'
+      ONGROW_RELEASE_SOURCE_SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      ONGROW_UPDATE_PUBLIC_KEY_HEX: abababababababababababababababababababababababababababababababababab
+      ONGROW_UPDATE_ORIGIN: https://updates.example.com
+      ONGROW_UPDATE_PREFIX: /lab/
+      ONGROW_MSI_UPGRADE_CODE: AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.81.0'
+      - name: Check compiled guardian and Windows health ABI
+        shell: pwsh
+        run: |
+          if ((& git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Unexpected source revision' }
+          python scripts/test_ongrow_windows_update_policy.py
+          if ($LASTEXITCODE -ne 0) { throw 'Policy regression failed' }
+          cargo test --locked --manifest-path tools/windows-update-guardian/Cargo.toml windows_integration::tests
+          if ($LASTEXITCODE -ne 0) { throw 'Windows guardian compilation or regression failed' }
+          cargo build --release --locked --manifest-path tools/windows-update-guardian/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Windows guardian executable build failed' }
+      - name: Real LocalSystem protected bootstrap and staging
+        shell: pwsh
+        run: |
+          $binaries=@(Get-ChildItem tools/windows-update-guardian/target/debug/deps/ongrow_windows_update_guardian-*.exe)
+          if ($binaries.Count -ne 1) { throw 'Exact native test executable required' }
+          $cases=& $binaries[0].FullName --list | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not $cases.Contains('ongrow_update::windows_integration::system_probe::protected_desk_bootstrap_staging_and_pending: test')) { throw 'Native System test was not compiled' }
+          $directory=Join-Path $env:RUNNER_TEMP 'ongrow-system-updater-test'
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $output=Join-Path $directory 'result.txt'
+          $script=Join-Path $directory 'run.ps1'
+          $binary=$binaries[0].FullName.Replace("'","''")
+          $result=$output.Replace("'","''")
+          @"
+          `$env:ONGROW_WINDOWS_SYSTEM_PROBE='approved-disposable-runner'
+          & '$binary' --ignored --exact ongrow_update::windows_integration::system_probe::protected_desk_bootstrap_staging_and_pending --nocapture *> '$result'
+          exit `$LASTEXITCODE
+          "@.Replace('\$','$') | Set-Content -LiteralPath $script -Encoding utf8
+          $action=New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe') -Argument ('-NoProfile -NonInteractive -File "'+$script+'"')
+          $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+          $task='OnGROW disposable updater bootstrap'
+          Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
+          Start-ScheduledTask -TaskName $task
+          $deadline=[DateTime]::UtcNow.AddMinutes(3)
+          do {
+            Start-Sleep -Seconds 1
+            $info=Get-ScheduledTaskInfo -TaskName $task
+            $state=(Get-ScheduledTask -TaskName $task).State
+          } while (($state -eq 'Running' -or $info.LastRunTime.Year -lt 2020) -and [DateTime]::UtcNow -lt $deadline)
+          if ($state -eq 'Running' -or $info.LastTaskResult -ne 0 -or -not (Test-Path $output) -or -not (Select-String -LiteralPath $output -SimpleMatch 'NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS' -Quiet)) {
+            Write-Output ('SYSTEM_TASK_EXIT='+$info.LastTaskResult)
+            if (Test-Path $output) {
+              foreach ($line in Get-Content -LiteralPath $output) {
+                if ($line -match '^SYSTEM_PROBE_PHASE:(SYSTEM|ROOT|STORE|GATE|STAGE|PENDING|CLEANUP)$') { Write-Output $line }
+                if ($line -match '^ONGROW_BOOTSTRAP_CONTEXT:(drive-root|product-root|company-parent|outer-ancestor)$') { Write-Output $line }
+                if ($line -match '^ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+$') { Write-Output $line }
+                if ($line -match 'called .*unwrap.*Err.*(Untrusted|Disabled|State|Io)') { Write-Output ('SYSTEM_PROBE_REJECT='+$Matches[1]) }
+              }
+            } else { Write-Output 'SYSTEM_PROBE_NO_OUTPUT' }
+            throw 'Native LocalSystem updater bootstrap failed; runner state retained'
+          }
+          Unregister-ScheduledTask -TaskName $task -Confirm:$false
+          Write-Output 'NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS'

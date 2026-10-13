@@ -1,4 +1,4 @@
-//! Signed verification and bounded transport. No app caller, persistence or apply.
+//! Signed verification, protected staging and platform update integration.
 #![allow(dead_code)] // Not connected to an updater until trusted bootstrap exists.
 
 pub mod manifest;
@@ -6,6 +6,8 @@ pub mod session_gate;
 pub(crate) mod runtime;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) mod protected_store;
+#[cfg(all(target_os = "windows", ongrow_windows_integration))]
+pub(crate) mod windows_integration;
 
 use hbb_common::sodiumoxide::{self, crypto::sign};
 use manifest::{Channel, Manifest, Platform, Product};

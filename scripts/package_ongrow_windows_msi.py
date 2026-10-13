@@ -132,7 +132,7 @@ def validate(source: Path, output: Path, product: str, sequence: int, upstream: 
             state = snapshot(path)
             if path.suffix.lower() in (".pem", ".key", ".pfx", ".p12", ".toml", ".log", ".ini", ".config", ".db", ".sqlite", ".sqlite3"):
                 raise ValueError("Sensitive payload suffix refused")
-            if path.suffix.lower() == ".exe" and rel != p["exe"]:
+            if path.suffix.lower() == ".exe" and rel != p["exe"] and not (not probe and product == "customer-desk" and rel == "ongrow-update.exe"):
                 raise ValueError("Foreign executable refused")
             files.append((rel, path, state))
     required = [p["exe"], "probe-version.txt"] if probe else [p["exe"], "librustdesk.dll", "flutter_windows.dll", "data/icudtl.dat", "data/flutter_assets/AssetManifest.json", "LICENCE", "ongrow-build-provenance.txt"]
@@ -144,6 +144,10 @@ def validate(source: Path, output: Path, product: str, sequence: int, upstream: 
     if any((value + "\0").encode("utf-16le") not in binary for value in identities):
         raise ValueError("PE product/role identity missing")
     if not probe:
+        if (source / "ongrow-update.exe").exists():
+            guardian = pe(source / "ongrow-update.exe", False)
+            if b"ONGROW_WINDOWS_UPDATE_GUARDIAN_V1" not in guardian:
+                raise ValueError("Windows update guardian identity missing")
         core = pe(source / "librustdesk.dll", True)
         pe(source / "flutter_windows.dll", True)
         if p["name"].encode("ascii") not in core:
@@ -259,7 +263,13 @@ def generate(product, sequence, upstream, sha, files, probe=False):
 def package(source, output, product, sequence, upstream, sha, emit_only=False, probe=False):
     source, output = source.absolute(), output.absolute()
     _, files = validate(source, output, product, sequence, upstream, sha, probe)
-    generated = generate(product, sequence, upstream, sha, [r for r, _, _ in files], probe)
+    digest_name = "ongrow-installed-payload.json"
+    if any(rel == digest_name for rel, _, _ in files):
+        raise ValueError("Generated installed-payload manifest must not come from source")
+    emitted_files = [r for r, _, _ in files]
+    if product == "customer-desk" and not probe:
+        emitted_files.append(digest_name)
+    generated = generate(product, sequence, upstream, sha, emitted_files, probe)
     check_parents(output)
     # No cleanup of foreign data on any failure. The incomplete exclusive output is diagnostic.
     output.mkdir()  # Parent must already exist; never create arbitrary ancestor paths.
@@ -284,6 +294,14 @@ def package(source, output, product, sequence, upstream, sha, emit_only=False, p
             if metadata_snapshot(s) != expected or snapshot(src) != expected:
                 raise ValueError("Source changed during copy")
         hashes[rel] = digest.hexdigest()
+    if product == "customer-desk" and not probe:
+        installed = dict(product=product, sequence=sequence, source_sha=sha, sha256=hashes)
+        raw = (json.dumps(installed, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        if len(raw) > 1024 * 1024 or len(hashes) > 4096:
+            raise ValueError("Installed-payload digest limits exceeded")
+        with (payload / digest_name).open("xb") as out:
+            out.write(raw)
+        hashes[digest_name] = hashlib.sha256(raw).hexdigest()
     with (output / "Package.wxs").open("xb") as out:
         out.write(generated)
     with (output / "Package.wixproj").open("xb") as out:

@@ -1,5 +1,61 @@
 # Windows transactional update packages
 
+## Desk service and independent guardian
+
+The Windows Desk build explicitly bakes the update role, Lab channel, monotonic
+package sequence, source revision, public Ed25519 key and fixed HTTPS location.
+Missing or invalid build inputs fail validation. Runtime environment, UI and
+ordinary RustDesk configuration cannot supply a key or redirect the updater.
+The MSI installs the separately compiled `ongrow-update.exe`; the legacy ZIP
+requires this one-time MSI installation before gated support and updates work.
+
+After its IPC listener exists, the LocalSystem Desk service creates only its
+fixed update root `Program Files\OnGROW\Support Desk Update` on first use.
+This sibling of the installation survives MSI replacement. Standard Windows
+ProgramData metadata grants fail the original strict ancestor policy, so the
+integrated Desk uses Program Files without relaxing that policy or modifying
+existing filesystem permissions. It never repairs existing ACLs or
+partial state. The service writes its loaded sequence/revision, PID and process
+creation time into protected local health state. The scheduler starts after
+30 seconds, checks daily after success and retries failures after 30 minutes.
+CI/smoke isolation prevents the scheduler from contacting release servers.
+
+The service copies the guardian out of the MSI installation directory into a
+fixed protected slot. The guardian survives the service being stopped by MSI,
+uses the original signed transport/store and re-verifies the ticket. A held
+session blocks installation. The guardian durably records Pending before
+starting MSI and retains both the gate and read-only MSI handles through native
+installation and loaded-service health checks. Each old Desk GUI/server closes
+itself in its own session when the protected Pending journal appears. A separate
+user helper waits outside the replacement tree and reopens the GUI/tray only
+after Ready. The service defers server relaunch while Pending; the guardian
+checks actual old process handles have exited before native installation. MSI timeout never kills a native
+transaction or opens admission. A durable native-attempt record is flushed
+before launch and atomically replaced with the known caller exit before health
+can commit. A Started/partial/unknown record remains Pending after guardian
+loss; neither a PID, mutex observation nor a newly running service substitutes
+for known completion. This uncertain case needs explicit operator recovery.
+
+Health requires the SCM's running service PID, its process creation time,
+installed executable path, protected executable/core files and the service's
+loaded sequence/revision. A package-generated owned-payload manifest checks the
+bytes of all declared runtime/assets, without reading application configuration.
+A known failed MSI caller can reopen admission only after the previous loaded
+service and all its old payload hashes prove rollback. Unknown caller timeout
+keeps Pending. Unsealed/expired pre-install scratch can be discarded only under
+a real Ready admission lease and the independent stage lock. Installer exit, a changed file hash, or a stale marker
+cannot open admission. Only then is the accepted sequence replaced atomically,
+staging cleaned and Ready recorded. Pending recovery accepts an authenticated
+same-release attempt only under an exclusive recovery transaction. A crash
+between sequence commit, staging cleanup and Ready is completed using matching
+loaded service health. Unknown, corrupt, expired or mismatched state stays blocked.
+No downgrade, legacy-EXE migration or fallback to stock RustDesk is enabled.
+
+This path needs a native test with the actual two Desk builds before releasing
+an updater-enabled customer MSI. Guardian compilation and prior probe installer
+success alone do not establish that product-level update proof. The Console and
+macOS update activation paths are separate.
+
 ## Guardian integration boundary
 
 The disposable CI lifecycle drill separately identifies both MSI probe products

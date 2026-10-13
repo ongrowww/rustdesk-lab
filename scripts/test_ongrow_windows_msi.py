@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Portable validation/XML tests. These are not native MSI lifecycle tests."""
 import json
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -100,8 +101,10 @@ class MsiTests(unittest.TestCase):
                           "Disable-NetFirewall", "VerifiedHealth", "commit_healthy", "--update"):
             self.assertNotIn(forbidden, script)
         for required in ("contents: read", "actions: read", "runs-on: windows-2022",
-                         "BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653",
-                         "ongrow-support-desk-msi-12-windows-x64", "ongrow-support-console-msi-36-windows-x64",
+                         "BUILD_SHA: ${{ matrix.build_sha }}",
+                         "build_sha: 6abdaf967a9d9e34be35782f07f82ddfd6642366",
+                         "build_sha: ad23f1a7d909237e15c893642f14e7f9d236db5e",
+                         "ongrow-support-desk-msi-16-windows-x64", "ongrow-support-console-msi-45-windows-x64",
                          "run.head_repository.full_name !== run.repository.full_name",
                          "run.head_sha !== process.env.BUILD_SHA", "run.conclusion !== 'success'",
                          "git merge-base --is-ancestor $env:BUILD_SHA HEAD", "persist-credentials: false",
@@ -204,8 +207,27 @@ class MsiTests(unittest.TestCase):
         self.assertFalse(descriptor["compiled"])
         self.assertFalse(descriptor["probe_only"])
         for rel in descriptor["payload_sha256"]:
+            if rel == "ongrow-installed-payload.json": continue
             self.assertEqual((self.output / "payload" / rel).read_bytes(), (self.source / rel).read_bytes())
         with self.assertRaises(ValueError): self.package()
+
+    def test_installed_digest_covers_actual_owned_bytes_and_is_in_msi(self):
+        self.package()
+        name="ongrow-installed-payload.json"
+        raw=(self.output / "payload" / name).read_bytes()
+        digest=json.loads(raw)
+        self.assertEqual((digest["product"],digest["sequence"],digest["source_sha"]),("customer-desk",1,SHA))
+        self.assertEqual(set(digest["sha256"]),{p.relative_to(self.source).as_posix() for p in self.source.rglob("*") if p.is_file()})
+        for rel,expected in digest["sha256"].items():
+            self.assertEqual(expected,hashlib.sha256((self.output / "payload" / rel).read_bytes()).hexdigest())
+        tree=ET.parse(self.output / "Package.wxs")
+        self.assertEqual(len(tree.findall('.//w:File[@Name="'+name+'"]',NS)),1)
+        descriptor=json.loads((self.output / "package.json").read_text())
+        self.assertEqual(descriptor["payload_sha256"][name],hashlib.sha256(raw).hexdigest())
+
+    def test_source_cannot_supply_its_own_installed_digest(self):
+        (self.source / "ongrow-installed-payload.json").write_text('{}')
+        self.reject()
 
     def test_all_required_and_wrong_architecture_role_provenance_rejected(self):
         for rel in [p.relative_to(self.source) for p in self.source.rglob("*") if p.is_file()]:

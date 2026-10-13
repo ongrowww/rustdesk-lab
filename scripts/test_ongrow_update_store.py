@@ -37,6 +37,16 @@ def addition(path, expected):
     if stop <= index or (index and raw[index - 1:index] != b"\n"):
         raise AssertionError("Addition markers must be separate ordered lines")
     original = raw[:index] + raw[stop + len(end):]
+    if path.name == "windows.rs":
+        route = (b"    // ONGROW_WINDOWS_ROOT_BEGIN\n"
+                 b"    #[cfg(ongrow_windows_integration)]\n"
+                 b"    if product == Product::CustomerDesk { return bootstrap::desk_update_root(); }\n"
+                 b"    // ONGROW_WINDOWS_ROOT_END\n")
+        # Only this fixed compile-time Desk route is allowed. ACL parsing,
+        # locks, file trust and non-integrated product paths stay byte-frozen.
+        if b"ONGROW_WINDOWS_ROOT_" in original and original.count(route) != 1:
+            raise AssertionError("Exact Windows Desk root route required")
+        original = original.replace(route, b"")
     if hashlib.sha256(original).hexdigest() != expected:
         raise AssertionError("Original source bytes changed outside additive block")
     block = raw[index + len(start):stop].decode("utf-8", errors="strict")

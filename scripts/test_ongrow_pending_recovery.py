@@ -21,48 +21,65 @@ BASELINE = "8be346aff0a8a423af51c85d0faa6d66f05c5b07"
 NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (
-    "scripts/package_ongrow_windows_setup.py",
-    "scripts/package_ongrow_windows_msi.py",
-    "scripts/test_ongrow_windows_msi.py",
-    "scripts/test_ongrow_windows_msi_lifecycle.ps1",
-    "scripts/fixtures/ongrow_msi_probe.cs",
-    "res/msi/ongrow/Package.wixproj",
-    "res/msi/ongrow/Package.wxs",
-    ".github/workflows/ongrow-autoupdate-windows-lab.yml",
-    ".github/workflows/ongrow-lab-windows-x64.yml",
-    ".github/workflows/ongrow-support-console-windows-x64.yml",
-    "scripts/test_ongrow_windows_product_msi.ps1",
-    ".github/workflows/ongrow-windows-product-msi-lab.yml",
-    "docs/ongrow-windows-autoupdate.md",
-    "flutter/macos/Runner.xcodeproj/project.pbxproj",
-    "flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
-    "flutter/macos/Runner/AppDelegate.swift",
-    "flutter/macos/Runner/Info.plist",
-    "flutter/macos/Runner/OnGrowUpdatePolicy.swift",
-    "flutter/macos/Runner/OnGrowUpdater.swift",
-    "scripts/apply_ongrow_macos_update_profile.py",
-    "scripts/test_ongrow_macos_update_profile.py",
-    "scripts/test_ongrow_macos_update_policy.swift",
-    "scripts/fixtures/ongrow_sparkle_probe/keys.swift",
-    "scripts/fixtures/ongrow_sparkle_probe/main.swift",
-    "scripts/test_ongrow_sparkle_probe.py",
-    ".github/workflows/ongrow-autoupdate-macos-lab.yml",
-    "docs/ongrow-macos-autoupdate.md",
-    ".github/workflows/ongrow-lab-macos-arm64.yml",
-    ".github/workflows/ongrow-support-console-macos-arm64.yml",
-    "src/ongrow_update/session_gate.rs",
-    "src/ongrow_update/protected_store.rs",
-    "src/ongrow_update/protected_store/attempt.rs",
-    "src/ongrow_update/protected_store_tests.rs",
-    "scripts/test_ongrow_update_store.py",
-    "docs/ongrow-update-store.md",
-    "src/ongrow_update/native_apply_tests.rs",
-    "scripts/fixtures/ongrow_native_apply_probe/lib.rs",
-    "scripts/test_ongrow_native_apply.py",
-    "scripts/test_ongrow_pending_recovery.py",
-    ".github/workflows/ongrow-pending-recovery-lab.yml",
-    "docs/ongrow-native-apply.md",
+    '.gitattributes',
+    'scripts/package_ongrow_windows_setup.py',
+    'scripts/package_ongrow_windows_msi.py',
+    'scripts/test_ongrow_windows_msi.py',
+    'scripts/test_ongrow_windows_msi_lifecycle.ps1',
+    'scripts/fixtures/ongrow_msi_probe.cs',
+    'res/msi/ongrow/Package.wixproj',
+    'res/msi/ongrow/Package.wxs',
+    '.github/workflows/ongrow-autoupdate-windows-lab.yml',
+    '.github/workflows/ongrow-lab-windows-x64.yml',
+    '.github/workflows/ongrow-support-console-windows-x64.yml',
+    'scripts/test_ongrow_windows_product_msi.ps1',
+    '.github/workflows/ongrow-windows-product-msi-lab.yml',
+    'docs/ongrow-windows-autoupdate.md',
+    'flutter/macos/Runner.xcodeproj/project.pbxproj',
+    'flutter/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved',
+    'flutter/macos/Runner/AppDelegate.swift',
+    'flutter/macos/Runner/Info.plist',
+    'flutter/macos/Runner/OnGrowUpdatePolicy.swift',
+    'flutter/macos/Runner/OnGrowUpdater.swift',
+    'scripts/apply_ongrow_macos_update_profile.py',
+    'scripts/test_ongrow_macos_update_profile.py',
+    'scripts/test_ongrow_macos_update_policy.swift',
+    'scripts/fixtures/ongrow_sparkle_probe/keys.swift',
+    'scripts/fixtures/ongrow_sparkle_probe/main.swift',
+    'scripts/test_ongrow_sparkle_probe.py',
+    '.github/workflows/ongrow-autoupdate-macos-lab.yml',
+    'docs/ongrow-macos-autoupdate.md',
+    '.github/workflows/ongrow-lab-macos-arm64.yml',
+    '.github/workflows/ongrow-support-console-macos-arm64.yml',
+    'src/ongrow_update/session_gate.rs',
+    'src/ongrow_update/protected_store.rs',
+    'src/ongrow_update/protected_store/attempt.rs',
+    'src/ongrow_update/protected_store_tests.rs',
+    'scripts/test_ongrow_update_store.py',
+    'docs/ongrow-update-store.md',
+    'src/ongrow_update/native_apply_tests.rs',
+    'scripts/fixtures/ongrow_native_apply_probe/lib.rs',
+    'scripts/test_ongrow_native_apply.py',
+    'scripts/test_ongrow_pending_recovery.py',
+    '.github/workflows/ongrow-pending-recovery-lab.yml',
+    'docs/ongrow-native-apply.md',
+    'src/ongrow_update/mod.rs',
+    'src/ongrow_update/session_gate/windows.rs',
+    'src/ongrow_update/session_gate/windows_bootstrap.rs',
+    'src/ongrow_update/windows_integration.rs',
+    'src/ongrow_update/protected_store/windows_apply.rs',
+    'src/platform/windows.rs',
+    'src/core_main.rs',
+    'scripts/check_ongrow_windows_update_policy.py',
+    'scripts/test_ongrow_windows_update_policy.py',
+    '.github/workflows/ongrow-windows-update-integration.yml',
+    'tools/windows-update-guardian/Cargo.toml',
+    'tools/windows-update-guardian/Cargo.lock',
+    'tools/windows-update-guardian/src/main.rs',
+    'tools/windows-update-guardian/.gitignore',
+    'scripts/test_ongrow_windows_desk_update.ps1',
 )
+
 OLD_ADDITIONS = {
     "session_gate.rs": (2534, "8d183bf159bb94d1198233a61f9f5df4992dfaa07adc312d8e3c05fa3fb287d6"),
     "session_gate/macos.rs": (3979, "6b39337d3b1270ce96b96e20b771488ade5e0ee8f727a3ff20297d7d6583fb72"),
@@ -77,8 +94,32 @@ def source(path):
     return path.read_text(encoding="utf-8", errors="strict")
 
 
+def strip_windows_extension(block, name):
+    # This later milestone owns these named additions. The original gate/store
+    # body is still byte-frozen after removing only these explicit interfaces.
+    for marker in (("CHILDREN", "NAMES", "HANDLES", "APPLY") if name == "session_gate.rs" else ("BOOTSTRAP",) if name == "session_gate/windows.rs" else ()):
+        begin="// ONGROW_WINDOWS_"+marker+"_BEGIN\n"
+        end="// ONGROW_WINDOWS_"+marker+"_END\n"
+        if block.count(begin)!=1 or block.count(end)!=1:
+            raise AssertionError("Exact Windows integration marker required")
+        start, stop=block.index(begin), block.index(end)
+        if stop<=start:raise AssertionError("Ordered Windows integration markers required")
+        content=block[start+len(begin):stop]
+        if marker=="CHILDREN":
+            expected="".join('        #[cfg(target_os = "windows")] '+name+',\n' for name in ("Health","Guardian","Installer","SequenceNext","NativeState","NativeNext"))
+            if content!=expected:raise AssertionError("Exact Windows fixed children required")
+        if marker=="NAMES":
+            expected="".join('                #[cfg(target_os = "windows")] Self::'+name+' => "'+value+'",\n' for name,value in (("Health","service-health-v1"),("Guardian","update-guardian-v1.exe"),("Installer","installer-v1.msi"),("SequenceNext","accepted-sequence-v1.next"),("NativeState","native-attempt-v1"),("NativeNext","native-attempt-v1.next")))
+            if content!=expected:raise AssertionError("Exact Windows fixed child names required")
+        block=block[:start]+block[stop+len(end):]
+    if name=="session_gate.rs":
+        block=block.replace("#[derive(Clone, Copy, PartialEq, Eq)]", "#[derive(Clone, Copy)]")
+        block=block.replace("pub(crate) enum Child { Sequence, StageLock, Payload, Attempt,\n    }", "pub(crate) enum Child { Sequence, StageLock, Payload, Attempt }")
+    return block
+
+
 def frozen_addition(name):
-    block = addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name])
+    block = strip_windows_extension(addition(ROOT / "src/ongrow_update" / name, ORIGINAL[name]), name)
     if name == "session_gate.rs":
         # Only the new fixed, non-path-selectable signed-attempt child is admitted.
         # All earlier gate/store bytes are still compared against their old hashes.
@@ -92,13 +133,28 @@ def frozen_addition(name):
 
 
 class SourceTests(unittest.TestCase):
+    def test_source_attributes_keep_exact_frozen_bytes_on_windows(self):
+        self.assertEqual((ROOT / ".gitattributes").read_text(encoding="utf-8").encode("utf-8"),
+                         b"* text=auto\n"
+                         b"src/ongrow_update/mod.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate/macos.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate/windows.rs text eol=lf\n"
+                         b"src/ongrow_update/runtime.rs text eol=lf\n")
+
+    def test_signed_verifier_stays_byte_frozen_outside_new_windows_module(self):
+        raw=(ROOT / "src/ongrow_update/mod.rs").read_bytes().split(b"\n",1)[1]
+        extension=b'#[cfg(all(target_os = "windows", ongrow_windows_integration))]\npub(crate) mod windows_integration;\n'
+        self.assertEqual(raw.count(extension),1)
+        self.assertEqual(hashlib.sha256(raw.replace(extension,b"")).hexdigest(),"4adc1f30f007736b90c69f69f64b633c18dbb90722eed3cac3a31fef0d839efd")
+
     def test_signed_child_extension_does_not_admit_other_gate_changes(self):
         block = addition(ROOT / "src/ongrow_update/session_gate.rs", ORIGINAL["session_gate.rs"])
         for mutated in (
                 block.replace('Self::Attempt => "attempt-v1.signed"', 'Self::Attempt => "selected-path"'),
-                block.replace("Payload, Attempt }", "Payload, Attempt, Arbitrary }")):
+                block.replace("Payload, Attempt,", "Payload, Attempt, Arbitrary,")):
             with self.subTest(mutation=mutated[-80:]), mock.patch(__name__ + ".addition", return_value=mutated):
-                with self.assertRaisesRegex(AssertionError, "Exact signed-attempt child extension required"):
+                with self.assertRaisesRegex(AssertionError, "Exact signed-attempt child extension required|Exact Windows"):
                     frozen_addition("session_gate.rs")
         with mock.patch(__name__ + ".addition", return_value=block.replace("pub(crate) struct StageLease", "pub struct StageLease")):
             canonical = frozen_addition("session_gate.rs").encode("utf-8")
@@ -192,7 +248,7 @@ class SourceTests(unittest.TestCase):
         target = ROOT / "target/ongrow-pending-recovery-scope"
         target.mkdir(parents=True, exist_ok=True)
         allowed = "src/ongrow_update/native_apply_tests.rs"
-        forbidden = ("src/ongrow_update/mod.rs", "src/ongrow_update/session_gate/macos.rs", "Cargo.toml")
+        forbidden = ("src/ongrow_update/runtime.rs", "src/ongrow_update/session_gate/macos.rs", "Cargo.toml")
         for changed in (allowed, *forbidden):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="scope-", dir=target) as directory:
                 scratch = Path(directory)
