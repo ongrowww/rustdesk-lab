@@ -82,15 +82,17 @@ jobs:
       matrix:
         include:
           - product: customer-desk
-            build_run: '37229320040'
-            artifact: ongrow-support-desk-msi-12-windows-x64
+            build_run: '38396395170'
+            artifact: ongrow-support-desk-msi-16-windows-x64
+            build_sha: 6abdaf967a9d9e34be35782f07f82ddfd6642366
             workflow: ongrow-lab-windows-x64.yml
           - product: support-console
-            build_run: '37229284217'
-            artifact: ongrow-support-console-msi-36-windows-x64
+            build_run: '38390972539'
+            artifact: ongrow-support-console-msi-45-windows-x64
+            build_sha: ad23f1a7d909237e15c893642f14e7f9d236db5e
             workflow: ongrow-support-console-windows-x64.yml
     env:
-      BUILD_SHA: ed37a8fac918ffac9f9c9038532a51c4d9ada653
+      BUILD_SHA: ${{ matrix.build_sha }}
     steps:
       - name: Checkout exact installation test source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
