@@ -1,6 +1,9 @@
 //! Fixed-slot protected store and signed attempt. No acceptance advance, cleanup or apply.
 #[path = "protected_store/attempt.rs"]
 mod attempt;
+#[cfg(all(target_os = "windows", ongrow_windows_integration))]
+#[path = "protected_store/windows_apply.rs"]
+mod windows_apply;
 use super::{
     manifest::{Channel, Platform, Product},
     runtime::{CheckOutcome, RuntimeError, RuntimePolicy, UpdateRuntime, VerifiedTransfer},
@@ -241,7 +244,9 @@ fn seal_job(input: WorkResult, transfer: VerifiedTransfer) -> impl FnOnce() -> R
         input._context.root.same(&reader, &input.identity)?;
         let attempt = attempt::persist(&input._context, raw, signature)?;
         Ok(SealedStageTicket { reader, attempt, identity: input.identity, context: input._context, _lease: input._lease,
-            candidate, raw_manifest: raw.to_vec(), signature: *signature })
+            candidate, raw_manifest: raw.to_vec(), signature: *signature,
+            #[cfg(all(target_os = "windows", ongrow_windows_integration))] recovery: false,
+            #[cfg(all(target_os = "windows", ongrow_windows_integration))] installer: None })
     }
 }
 impl PendingStage {
@@ -328,14 +333,20 @@ pub(crate) struct SealedStageTicket {
     reader: File, attempt: attempt::StoredAttempt, identity: FileIdentity,
     _lease: Arc<StageLease>, context: Arc<StoreContext>,
     candidate: VerifiedCandidate, raw_manifest: Vec<u8>, signature: [u8; 64],
+    #[cfg(all(target_os = "windows", ongrow_windows_integration))] recovery: bool,
+    #[cfg(all(target_os = "windows", ongrow_windows_integration))] installer: Option<File>,
 }
 impl SealedStageTicket {
     pub(crate) fn reverify(&mut self) -> Result<(), Error> {
         self.attempt.matches(&self.context, &self.raw_manifest, &self.signature)?;
         self.context.root.same(&self.reader, &self.identity)?;
         let snapshot = self.context.snapshot()?;
-        let candidate = verify_manifest(&self.raw_manifest, &self.signature, &self.context.identity.key,
-            &self.context.identity.context(self.context.now()?, snapshot))?;
+        let verify_context = self.context.identity.context(self.context.now()?, snapshot);
+        #[cfg(all(target_os = "windows", ongrow_windows_integration))]
+        let verify_context = if self.recovery { self.recovery_context(verify_context)? } else { verify_context };
+        let candidate = verify_manifest(&self.raw_manifest, &self.signature, &self.context.identity.key, &verify_context)?;
+        #[cfg(all(target_os = "windows", ongrow_windows_integration))]
+        if self.recovery { self.require_recovery_sequence(&candidate)?; }
         hash_handle(&self.reader, &candidate)?;
         self.context.root.same(&self.reader, &self.identity)?;
         self.attempt.matches(&self.context, &self.raw_manifest, &self.signature)?;

@@ -26,6 +26,15 @@ env:
   ONGROW_RENDEZVOUS_HOST: "${{ vars.ONGROW_RENDEZVOUS_HOST }}"
   ONGROW_HBBS_PUBLIC_KEY: "${{ vars.ONGROW_HBBS_PUBLIC_KEY }}"
   ONGROW_CONTROL_PLANE_URL: "${{ vars.ONGROW_CONTROL_PLANE_URL }}"
+  ONGROW_PRODUCT_ROLE: customer-desk
+  ONGROW_WINDOWS_UPDATER: v1
+  ONGROW_UPDATE_SESSION_GATE: v1
+  ONGROW_RELEASE_SEQUENCE: ${{ github.run_number }}
+  ONGROW_RELEASE_SOURCE_SHA: ${{ github.sha }}
+  ONGROW_UPDATE_PUBLIC_KEY_HEX: ${{ vars.ONGROW_UPDATE_PUBLIC_KEY_HEX }}
+  ONGROW_UPDATE_ORIGIN: ${{ vars.ONGROW_UPDATE_ORIGIN }}
+  ONGROW_UPDATE_PREFIX: ${{ vars.ONGROW_UPDATE_DESK_PREFIX }}
+
 
 jobs:
   generate-bridge:
@@ -145,6 +154,8 @@ jobs:
     needs: generate-bridge
     runs-on: windows-2022
     timeout-minutes: 180
+    env:
+      RUSTFLAGS: --cfg ongrow_windows_integration
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -281,10 +292,25 @@ jobs:
           cargo test --locked --lib --features flutter service_commands
           cargo test --locked --lib --features flutter broker_process_identity
 
+      - name: Validate baked Windows updater policy
+        shell: pwsh
+        run: |
+          python scripts/check_ongrow_windows_update_policy.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows updater policy invalid' }
+
       - name: Build unsigned Windows x64 customer desk
         shell: pwsh
         run: |
           python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+
+      - name: Build independent Windows update guardian
+        shell: pwsh
+        env:
+          RUSTFLAGS: --cfg ongrow_windows_integration -C target-feature=+crt-static
+        run: |
+          cargo build --release --locked --manifest-path tools/windows-update-guardian/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Windows update guardian build failed' }
+          Copy-Item tools/windows-update-guardian/target/release/ongrow-windows-update-guardian.exe flutter/build/windows/x64/runner/Release/ongrow-update.exe
 
       - name: Verify and stage unsigned artifact
         shell: pwsh

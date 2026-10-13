@@ -676,6 +676,13 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     log::info!("session id {}", session_id);
     let mut h_process = launch_server(session_id, true).await.unwrap_or(NULL);
     let mut incoming = ipc::new_listener(crate::POSTFIX_SERVICE).await?;
+    // Only report loaded-code health after the service listener exists. A headless
+    // service may have no interactive server child yet. This does not clear the update journal or grant session admission.
+    #[cfg(ongrow_windows_integration)]
+    if let Err(error) = crate::ongrow_update::windows_integration::service_ready() {
+        log::error!("OnGROW Windows update initialization failed: {:?}", error);
+    }
+
     let mut stored_usid = None;
     loop {
         let sids: Vec<_> = get_available_sessions(false)

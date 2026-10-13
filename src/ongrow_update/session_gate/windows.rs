@@ -615,4 +615,7 @@ impl Lock {
         Ok(())
     }
 }
+#[path = "windows_bootstrap.rs"]
+mod bootstrap;
+pub(super) use bootstrap::{require_system, bootstrap_desk_root, installed_file, desk_installation, system_executable};
 // ONGROW_STORE_ADDITIONS_END

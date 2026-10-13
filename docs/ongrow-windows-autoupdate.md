@@ -1,5 +1,44 @@
 # Windows transactional update packages
 
+## Desk service and independent guardian
+
+The Windows Desk build explicitly bakes the update role, Lab channel, monotonic
+package sequence, source revision, public Ed25519 key and fixed HTTPS location.
+Missing or invalid build inputs fail validation. Runtime environment, UI and
+ordinary RustDesk configuration cannot supply a key or redirect the updater.
+The MSI installs the separately compiled `ongrow-update.exe`; the legacy ZIP
+requires this one-time MSI installation before gated support and updates work.
+
+After its IPC listener exists, the LocalSystem Desk service creates only its
+fixed, protected update root on first use. It never repairs existing ACLs or
+partial state. The service writes its loaded sequence/revision, PID and process
+creation time into protected local health state. The scheduler starts after
+30 seconds, checks daily after success and retries failures after 30 minutes.
+CI/smoke isolation prevents the scheduler from contacting release servers.
+
+The service copies the guardian out of the MSI installation directory into a
+fixed protected slot. The guardian survives the service being stopped by MSI,
+uses the original signed transport/store and re-verifies the ticket. A held
+session blocks installation. The guardian durably records Pending before
+starting MSI and retains both the gate and read-only MSI handles through native
+installation and loaded-service health checks. MSI timeout never kills a native
+transaction or opens admission.
+
+Health requires the SCM's running service PID, its process creation time,
+installed executable path, protected executable/core files and the service's
+loaded sequence/revision. Installer exit, a changed file hash, or a stale marker
+cannot open admission. Only then is the accepted sequence replaced atomically,
+staging cleaned and Ready recorded. Pending recovery accepts an authenticated
+same-release attempt only under an exclusive recovery transaction. A crash
+between sequence commit, staging cleanup and Ready is completed using matching
+loaded service health. Unknown, corrupt, expired or mismatched state stays blocked.
+No downgrade, legacy-EXE migration or fallback to stock RustDesk is enabled.
+
+This path needs a native test with the actual two Desk builds before releasing
+an updater-enabled customer MSI. Guardian compilation and prior probe installer
+success alone do not establish that product-level update proof. The Console and
+macOS update activation paths are separate.
+
 ## Guardian integration boundary
 
 The disposable CI lifecycle drill separately identifies both MSI probe products

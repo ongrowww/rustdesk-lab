@@ -114,8 +114,13 @@ pub(crate) mod store_handles {
     use super::{os, Error, Product};
     use std::fs::File;
 
-    #[derive(Clone, Copy)]
-    pub(crate) enum Child { Sequence, StageLock, Payload, Attempt }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Child { Sequence, StageLock, Payload, Attempt,
+        #[cfg(target_os = "windows")] Health,
+        #[cfg(target_os = "windows")] Guardian,
+        #[cfg(target_os = "windows")] Installer,
+        #[cfg(target_os = "windows")] SequenceNext,
+    }
     impl Child {
         pub(super) fn name(self) -> &'static str {
             match self {
@@ -123,6 +128,10 @@ pub(crate) mod store_handles {
                 Self::StageLock => "staging-v1.lock",
                 Self::Payload => "stage-v1.payload",
                 Self::Attempt => "attempt-v1.signed",
+                #[cfg(target_os = "windows")] Self::Health => "service-health-v1",
+                #[cfg(target_os = "windows")] Self::Guardian => "update-guardian-v1.exe",
+                #[cfg(target_os = "windows")] Self::Installer => "installer-v1.msi",
+                #[cfg(target_os = "windows")] Self::SequenceNext => "accepted-sequence-v1.next",
             }
         }
     }
@@ -145,6 +154,12 @@ pub(crate) mod store_handles {
         }
         pub(crate) fn sync_file(&self, file: &File) -> Result<(), Error> { self.inner.sync_file(file) }
         pub(crate) fn sync_directory(&self) -> Result<(), Error> { self.inner.sync_directory() }
+        #[cfg(target_os = "windows")]
+        pub(crate) fn path(&self, child: Child) -> std::path::PathBuf { self.inner.path(child) }
+        #[cfg(target_os = "windows")]
+        pub(crate) fn replace(&self, child: Child, bytes: &[u8]) -> Result<(), Error> { self.inner.replace(child, bytes) }
+        #[cfg(target_os = "windows")]
+        pub(crate) fn remove(&self, child: Child) -> Result<(), Error> { self.inner.remove(child) }
         pub(crate) fn stage_lease(&self) -> Result<StageLease, Error> {
             Ok(StageLease { _inner: self.inner.stage_lease()? })
         }
@@ -184,4 +199,24 @@ mod pending_recovery_tests;
 #[cfg(all(test, ongrow_native_apply_probe, any(target_os = "macos", target_os = "windows")))]
 #[path = "native_apply_tests.rs"]
 mod native_apply_tests;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_bootstrap {
+    use super::*;
+    pub(crate) fn root() -> Result<bool, Error> { os::bootstrap_desk_root() }
+    pub(crate) fn system() -> Result<(), Error> { os::require_system() }
+    pub(crate) fn installed_file(name: &str) -> Result<std::fs::File, Error> { os::installed_file(name) }
+    pub(crate) fn installation() -> Result<std::path::PathBuf, Error> { os::desk_installation() }
+    pub(crate) fn system_executable(name: &str) -> Result<std::path::PathBuf, Error> { os::system_executable(name) }
+}
+#[cfg(all(target_os = "windows", ongrow_windows_integration))]
+impl Transaction {
+    pub(crate) fn recover() -> Result<Self, Error> {
+        let mut lock = os::exclusive(Product::CustomerDesk)?;
+        lock.require_pending()?;
+        Ok(Self { lock })
+    }
+    pub(crate) fn finish_windows(self, _proof: super::windows_integration::HealthyService) -> Result<(), Error> {
+        self.commit_healthy(VerifiedHealth(()))
+    }
+}
 // ONGROW_STORE_ADDITIONS_END
