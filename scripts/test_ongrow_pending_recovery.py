@@ -22,6 +22,8 @@ NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os =
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (
     '.gitattributes',
+    '.github/workflows/ongrow-update-store-lab.yml',
+    '.github/workflows/ongrow-update-runtime-lab.yml',
     'scripts/package_ongrow_windows_setup.py',
     'scripts/package_ongrow_windows_msi.py',
     'scripts/test_ongrow_windows_msi.py',
