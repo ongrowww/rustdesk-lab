@@ -10,7 +10,11 @@ The MSI installs the separately compiled `ongrow-update.exe`; the legacy ZIP
 requires this one-time MSI installation before gated support and updates work.
 
 After its IPC listener exists, the LocalSystem Desk service creates only its
-fixed, protected update root on first use. It never repairs existing ACLs or
+fixed update root `Program Files\OnGROW\Support Desk Update` on first use.
+This sibling of the installation survives MSI replacement. Standard Windows
+ProgramData metadata grants fail the original strict ancestor policy, so the
+integrated Desk uses Program Files without relaxing that policy or modifying
+existing filesystem permissions. It never repairs existing ACLs or
 partial state. The service writes its loaded sequence/revision, PID and process
 creation time into protected local health state. The scheduler starts after
 30 seconds, checks daily after success and retries failures after 30 minutes.

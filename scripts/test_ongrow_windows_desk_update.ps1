@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'Disposable Windows runner required' }
 $install = Join-Path $env:ProgramW6432 'OnGROW Support Desk'
 $exe = Join-Path $install 'OnGROW Support Desk.exe'
-$state = Join-Path $env:ProgramData 'OnGROW\Support Desk Update'
+$state = Join-Path ${env:ProgramFiles} 'OnGROW\Support Desk Update'
 $registry = 'HKLM:\Software\OnGROW\Packages\customer-desk'
 if ((Test-Path $install) -or (Test-Path $state) -or (Test-Path $registry) -or (Get-Service 'OnGROW Support Desk' -ErrorAction SilentlyContinue)) { throw 'Fresh real-product fixture required' }
 

@@ -22,6 +22,13 @@ pub(crate) fn desk_installation() -> Result<PathBuf, Error> {
             .join("OnGROW Support Desk"),
     )
 }
+pub(super) fn desk_update_root() -> Result<PathBuf, Error> {
+    // ProgramData permits foreign metadata writes on standard Windows. Keep
+    // every ancestor subject to the original strict trust checks by using the
+    // protected Program Files tree. This sibling survives Desk MSI replacement.
+    Ok(known_folder(&windows::Win32::UI::Shell::FOLDERID_ProgramFilesX64)?
+        .join("OnGROW\\Support Desk Update"))
+}
 pub(crate) fn installed_file(name: &str) -> Result<File, Error> {
     if !matches!(
         name,
