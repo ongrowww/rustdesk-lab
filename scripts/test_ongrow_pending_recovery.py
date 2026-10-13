@@ -134,7 +134,7 @@ def frozen_addition(name):
 
 class SourceTests(unittest.TestCase):
     def test_source_attributes_keep_exact_frozen_bytes_on_windows(self):
-        self.assertEqual((ROOT / ".gitattributes").read_bytes(),
+        self.assertEqual((ROOT / ".gitattributes").read_text(encoding="utf-8").encode("utf-8"),
                          b"* text=auto\n"
                          b"src/ongrow_update/mod.rs text eol=lf\n"
                          b"src/ongrow_update/session_gate.rs text eol=lf\n"
