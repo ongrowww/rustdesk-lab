@@ -7,14 +7,20 @@ impl SealedStageTicket {
     pub(crate) fn manifest(&self) -> &super::super::manifest::Manifest {
         self.candidate.manifest()
     }
-    pub(super) fn recovery_context<'a>(&'a self, mut context: Context<'a>) -> Result<Context<'a>, Error> {
+    pub(super) fn recovery_context<'a>(
+        &'a self,
+        mut context: Context<'a>,
+    ) -> Result<Context<'a>, Error> {
         // Only resume_stage_recovery, which requires a held Pending Transaction,
         // constructs recovery tickets. Signature/context/time remain unchanged.
         context.baked_current_sequence = 0;
         context.last_accepted_sequence = LastAcceptedSequence::Known(0);
         Ok(context)
     }
-    pub(super) fn require_recovery_sequence(&self, candidate: &VerifiedCandidate) -> Result<(), Error> {
+    pub(super) fn require_recovery_sequence(
+        &self,
+        candidate: &VerifiedCandidate,
+    ) -> Result<(), Error> {
         let accepted = match self.context.snapshot()?.state {
             LastAcceptedSequence::Known(s) => s,
             _ => return Err(Error::State),
@@ -64,6 +70,17 @@ impl SealedStageTicket {
     }
 }
 impl ProtectedStore {
+    /// Safe scratch cleanup only while a real Ready/shared admission lease and
+    /// the independent stage lock exclude every legitimate native installer.
+    pub(crate) fn discard_ready(&self, ready: &session_gate::SessionLease) -> Result<(), Error> {
+        if !ready.protects_ready() {
+            return Err(Error::State);
+        }
+        self.snapshot()?;
+        let _lease = self.context.root.stage_lease()?;
+        self.cleanup_slots()
+    }
+
     pub(crate) async fn resume_stage_recovery(
         &self,
         _transaction: &session_gate::Transaction,
@@ -122,6 +139,23 @@ impl ProtectedStore {
         context
             .root
             .replace(Child::Sequence, &context.identity.record(proof.sequence))?;
+        drop(ticket);
+        self.cleanup_slots()?;
+        drop(lease);
+        Ok(())
+    }
+    pub(crate) fn rollback_windows(
+        &self,
+        ticket: SealedStageTicket,
+        proof: &HealthyService,
+    ) -> Result<(), Error> {
+        if !Arc::ptr_eq(&self.context, &ticket.context)
+            || proof.sequence != self.context.identity.baked_sequence
+            || !matches!(self.snapshot()?.state,LastAcceptedSequence::Known(s) if s==proof.sequence)
+        {
+            return Err(Error::State);
+        }
+        let lease = Arc::clone(&ticket._lease);
         drop(ticket);
         self.cleanup_slots()?;
         drop(lease);

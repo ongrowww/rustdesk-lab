@@ -5,7 +5,7 @@ from check_ongrow_windows_update_policy import validate
 class PolicyTests(unittest.TestCase):
     def setUp(self):
         self.policy=dict(ONGROW_WINDOWS_UPDATER='v1',ONGROW_UPDATE_SESSION_GATE='v1',ONGROW_PRODUCT_ROLE='customer-desk',
-            ONGROW_RELEASE_SEQUENCE='19',ONGROW_RELEASE_SOURCE_SHA='a'*40,ONGROW_UPDATE_PUBLIC_KEY_HEX='ab'*32,
+            ONGROW_RELEASE_SEQUENCE='19',ONGROW_MSI_UPGRADE_CODE='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE',ONGROW_RELEASE_SOURCE_SHA='a'*40,ONGROW_UPDATE_PUBLIC_KEY_HEX='ab'*32,
             ONGROW_UPDATE_ORIGIN='https://updates.example.com',ONGROW_UPDATE_PREFIX='/desk/windows/lab/')
     def test_valid_complete_compiled_policy(self): validate(self.policy)
     def test_missing_identity_key_sequence_and_endpoint_are_rejected(self):

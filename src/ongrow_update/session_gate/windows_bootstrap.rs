@@ -259,3 +259,70 @@ impl ProtectedRoot {
         std::fs::remove_file(self.path(child)).map_err(|_| Error::Io)
     }
 }
+
+pub(crate) fn pending() -> Result<bool, Error> {
+    let path = root(Product::CustomerDesk)?;
+    let user = User::current()?;
+    let _parents = directory(&path, &user, Product::CustomerDesk)?;
+    let mut file = open(&path.join(JOURNAL), false, false, false)?;
+    inspect(&file, &user, Product::CustomerDesk, false, false)?;
+    if file.metadata().map_err(|_| Error::Io)?.len() != 1 {
+        return Err(Error::Untrusted);
+    }
+    let mut byte = [0];
+    file.read_exact(&mut byte).map_err(|_| Error::Io)?;
+    match byte[0] {
+        READY => Ok(false),
+        PENDING => Ok(true),
+        _ => Err(Error::Untrusted),
+    }
+}
+
+// Manifest entries may select only regular runtime files under this fixed app
+// tree. No config/private path, reparse point, link, ADS or Windows alias is read.
+pub(crate) fn installed_payload_file(name: &str) -> Result<File, Error> {
+    if name.is_empty() || !name.is_ascii() || name.contains(['\\', ':', '~']) {
+        return Err(Error::Untrusted);
+    }
+    for part in name.split('/') {
+        let folded = part.to_ascii_lowercase();
+        if part.is_empty()
+            || matches!(part, "." | "..")
+            || part.ends_with(['.', ' '])
+            || part.bytes().any(|b| b < 32 || b"<>\"|?*".contains(&b))
+            || matches!(
+                folded.as_str(),
+                "private" | "secrets" | "inventory" | "config" | "logs" | "userdata"
+            )
+            || folded.starts_with(".env")
+            || [
+                ".pem", ".key", ".pfx", ".p12", ".toml", ".log", ".ini", ".config", ".db",
+                ".sqlite", ".sqlite3",
+            ]
+            .iter()
+            .any(|ext| folded.ends_with(ext))
+        {
+            return Err(Error::Untrusted);
+        }
+        let base = folded.split('.').next().ok_or(Error::Untrusted)?;
+        if matches!(
+            base,
+            "con" | "prn" | "aux" | "nul" | "clock$" | "conin$" | "conout$"
+        ) || (base.len() == 4
+            && (base.starts_with("com") || base.starts_with("lpt"))
+            && matches!(base.as_bytes()[3], b'1'..=b'9'))
+        {
+            return Err(Error::Untrusted);
+        }
+    }
+    let path = desk_installation()?.join(name);
+    let user = User::current()?;
+    let _parents = directory(
+        path.parent().ok_or(Error::Untrusted)?,
+        &user,
+        Product::CustomerDesk,
+    )?;
+    let file = open(&path, false, false, false)?;
+    inspect(&file, &user, Product::CustomerDesk, false, false)?;
+    Ok(file)
+}

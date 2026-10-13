@@ -211,7 +211,9 @@ pub(crate) mod windows_bootstrap {
     use super::*;
     pub(crate) fn root() -> Result<bool, Error> { os::bootstrap_desk_root() }
     pub(crate) fn system() -> Result<(), Error> { os::require_system() }
+    pub(crate) fn pending() -> Result<bool, Error> { os::pending() }
     pub(crate) fn installed_file(name: &str) -> Result<std::fs::File, Error> { os::installed_file(name) }
+    pub(crate) fn payload_file(name: &str) -> Result<std::fs::File, Error> { os::installed_payload_file(name) }
     pub(crate) fn installation() -> Result<std::path::PathBuf, Error> { os::desk_installation() }
     pub(crate) fn system_executable(name: &str) -> Result<std::path::PathBuf, Error> { os::system_executable(name) }
 }
@@ -225,6 +227,10 @@ impl Transaction {
     pub(crate) fn finish_windows(self, _proof: super::windows_integration::HealthyService) -> Result<(), Error> {
         self.commit_healthy(VerifiedHealth(()))
     }
+}
+#[cfg(all(target_os = "windows", ongrow_windows_integration))]
+impl SessionLease {
+    pub(crate) fn protects_ready(&self) -> bool { self._lock.is_some() }
 }
 // ONGROW_WINDOWS_APPLY_END
 // ONGROW_STORE_ADDITIONS_END

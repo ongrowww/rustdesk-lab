@@ -93,6 +93,7 @@ jobs:
             ':(exclude)src/ongrow_update/windows_integration.rs' \
             ':(exclude)src/ongrow_update/protected_store/windows_apply.rs' \
             ':(exclude)src/platform/windows.rs' \
+            ':(exclude)src/core_main.rs' \
             ':(exclude)scripts/check_ongrow_windows_update_policy.py' \
             ':(exclude)scripts/test_ongrow_windows_update_policy.py' \
             ':(exclude).github/workflows/ongrow-windows-update-integration.yml' \

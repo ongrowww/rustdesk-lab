@@ -70,6 +70,7 @@ impl Policy {
                 .bytes()
                 .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
             || public.len() != 64
+            || option_env!("ONGROW_MSI_UPGRADE_CODE").map_or(true, |code| code.len() != 36)
         {
             return Err(Error::Policy);
         }
@@ -282,6 +283,7 @@ impl HealthyService {
         if bytes != loaded_health(sequence, source, pid, created) || service_pid()? != pid {
             return Err(Error::Health);
         }
+        verify_installed_payload(sequence, source)?;
         let mut code = 0;
         if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 || code != 259 {
             return Err(Error::Health);
@@ -295,7 +297,7 @@ impl HealthyService {
     }
 }
 
-/// Called by the actual service after its server child and IPC listener exist.
+/// Called by the actual service after its IPC listener exists.
 /// It never declares an update complete or clears Pending itself.
 pub(crate) fn service_ready() -> Result<(), Error> {
     let policy = match Policy::compiled() {
@@ -357,6 +359,7 @@ fn run_guardian() -> Result<i32, Error> {
     std::io::copy(&mut source, &mut target).map_err(|_| Error::Io)?;
     root.sync_file(&target)?;
     drop(target);
+    drop(source);
     if hash(&root.read(Child::Guardian)?)? != expected {
         return Err(Error::Trust);
     }
@@ -410,7 +413,6 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
                 }
                 let health = HealthyService::verify(&root, policy.sequence, &policy.source)?;
                 store.cleanup_committed(&health)?;
-                store.cleanup_committed(&health)?;
                 recovery.ok_or(Error::Trust)?.finish_windows(health)?;
                 return Ok(10);
             }
@@ -419,13 +421,21 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
     } else {
         match store.resume_stage().await {
             Ok(ticket) => ticket,
-            Err(protected_store::Error::Trust(session_gate::Error::MissingGate)) => {
+            Err(protected_store::Error::Trust(session_gate::Error::Busy)) => return Ok(11),
+            Err(protected_store::Error::Trust(session_gate::Error::Untrusted)) => {
+                return Err(Error::Trust)
+            }
+            Err(_) => {
+                // A failed download or expired pre-install attempt must not
+                // occupy the sole slot forever. Pending can never enter here.
+                let ready = session_gate::admit()?;
+                store.discard_ready(&ready)?;
+                drop(ready);
                 match store.download(true).await? {
                     StageOutcome::NoUpdate => return Ok(0),
                     StageOutcome::Sealed(ticket) => ticket,
                 }
             }
-            Err(error) => return Err(error.into()),
         }
     };
     let sequence = ticket.manifest().release_sequence;
@@ -447,6 +457,8 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
             // The signed ticket remains held, denying write/replace of MSI bytes.
             let executable = session_gate::windows_bootstrap::system_executable("msiexec.exe")?;
             let payload = ticket.installer_path()?;
+            validate_msi(&payload, sequence)?;
+            quiesce_apps().await?;
             let mut child = Command::new(executable)
                 .arg("/i")
                 .arg(payload)
@@ -469,7 +481,23 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
                 tokio::time::sleep(Duration::from_secs(1)).await;
             };
             if code != 0 && code != 3010 {
-                return Err(Error::Installer);
+                // Caller exit is known here; timeouts/pipe loss never enter this
+                // path. Only the authentic previous service AND every old
+                // owned payload hash can prove the native rollback restored it.
+                let started = Instant::now();
+                loop {
+                    if let Ok(previous) =
+                        HealthyService::verify(&root, policy.sequence, &policy.source)
+                    {
+                        store.rollback_windows(ticket, &previous)?;
+                        transaction.finish_windows(previous)?;
+                        return Ok(1);
+                    }
+                    if started.elapsed() >= Duration::from_secs(120) {
+                        return Err(Error::Installer);
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
             }
             let started = Instant::now();
             loop {
@@ -512,5 +540,417 @@ mod tests {
     #[test]
     fn a_file_or_unregistered_process_does_not_prove_service_health() {
         assert!(service_pid().is_err());
+    }
+    #[test]
+    fn payload_health_cannot_read_private_paths_or_windows_aliases() {
+        for name in [
+            "../private/key",
+            "data/.env",
+            "data/config/settings.json",
+            "private/password.txt",
+            "secrets/key.json",
+            "data/secret.pem",
+            "data/foo:bar",
+            "data/CON.txt",
+            "data/private~1/key",
+        ] {
+            assert!(session_gate::windows_bootstrap::payload_file(name).is_err());
+        }
+    }
+}
+
+/// Shared protected journal observation. An error never requests process exit.
+pub(crate) fn apply_pending() -> bool {
+    session_gate::windows_bootstrap::pending() == Ok(true)
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Restart {
+    Gui,
+    Tray,
+}
+
+/// The original app closes itself in its own Windows session. SYSTEM does not
+/// impersonate users, broadcast window messages or kill other principals.
+pub(crate) fn start_process_watcher(restart: Option<Restart>, quit: fn()) -> Result<(), Error> {
+    match Policy::compiled() {
+        Err(Error::Disabled) => return Ok(()),
+        result => {
+            result?;
+        }
+    }
+    let expected = session_gate::windows_bootstrap::installation()?.join("OnGROW Support Desk.exe");
+    if !equal_path(&std::env::current_exe().map_err(|_| Error::Io)?, &expected) {
+        return Err(Error::Trust);
+    }
+    std::thread::Builder::new()
+        .name("ongrow-update-admission".into())
+        .spawn(move || loop {
+            if apply_pending() {
+                if let Some(mode) = restart {
+                    let launch = || -> Result<(), Error> {
+                        let root = ProtectedRoot::open(session_gate::Product::CustomerDesk)?;
+                        let _image = root.read(Child::Guardian)?;
+                        Command::new(root.path(Child::Guardian))
+                            .arg(match mode {
+                                Restart::Gui => "--wait-restart",
+                                Restart::Tray => "--wait-restart-tray",
+                            })
+                            .creation_flags(0x08000000)
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .spawn()
+                            .map_err(|_| Error::Io)?;
+                        Ok(())
+                    };
+                    if launch().is_err() {
+                        std::thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                }
+                quit();
+                return;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        })
+        .map_err(|_| Error::Io)?;
+    Ok(())
+}
+
+/// A user child of the original GUI waits outside the replacement directory.
+/// It has no installer/state-write authority and launches only the fixed app.
+pub(crate) async fn wait_restart(tray: bool) -> Result<i32, Error> {
+    Policy::compiled()?;
+    let root = ProtectedRoot::open(session_gate::Product::CustomerDesk)?;
+    if !equal_path(
+        &std::env::current_exe().map_err(|_| Error::Io)?,
+        &root.path(Child::Guardian),
+    ) {
+        return Err(Error::Trust);
+    }
+    let started = Instant::now();
+    loop {
+        if !session_gate::windows_bootstrap::pending()? {
+            let lease = match session_gate::admit() {
+                Ok(lease) => lease,
+                Err(session_gate::Error::Busy | session_gate::Error::Pending) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let executable =
+                session_gate::windows_bootstrap::installation()?.join("OnGROW Support Desk.exe");
+            let _trusted =
+                session_gate::windows_bootstrap::installed_file("OnGROW Support Desk.exe")?;
+            let mut command = Command::new(executable);
+            if tray {
+                command.arg("--tray");
+            }
+            command
+                .creation_flags(0x08000000)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|_| Error::Io)?;
+            drop(lease);
+            return Ok(0);
+        }
+        if started.elapsed() >= Duration::from_secs(900) {
+            return Err(Error::Health);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn quiesce_apps() -> Result<(), Error> {
+    use windows::Win32::{
+        Foundation::{CloseHandle as CloseSnapshot, INVALID_HANDLE_VALUE},
+        System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
+    };
+    let snapshot =
+        unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(|_| Error::Health)?;
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(Error::Health);
+    }
+    struct Snapshot(windows::Win32::Foundation::HANDLE);
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseSnapshot(self.0);
+            }
+        }
+    }
+    let snapshot = Snapshot(snapshot);
+    let mut entry = PROCESSENTRY32W::default();
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    unsafe { Process32FirstW(snapshot.0, &mut entry) }.map_err(|_| Error::Health)?;
+    let mut valid = true;
+    let service = service_pid().ok();
+    let expected = session_gate::windows_bootstrap::installation()?.join("OnGROW Support Desk.exe");
+    let mut processes = Vec::new();
+    while valid {
+        let length = entry
+            .szExeFile
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16(&entry.szExeFile[..length]).map_err(|_| Error::Health)?;
+        if name.eq_ignore_ascii_case("OnGROW Support Desk.exe")
+            && Some(entry.th32ProcessID) != service
+        {
+            let (handle, _, path) = process(entry.th32ProcessID)?;
+            if equal_path(&path, &expected) {
+                processes.push(handle);
+            }
+        }
+        valid = match unsafe { Process32NextW(snapshot.0, &mut entry) } {
+            Ok(()) => true,
+            Err(error) if error.code().0 as u32 == 0x80070012 => false,
+            Err(_) => return Err(Error::Health),
+        };
+    }
+    let started = Instant::now();
+    loop {
+        let mut all_stopped = true;
+        for process in &processes {
+            let mut code = 0;
+            if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
+                return Err(Error::Health);
+            }
+            if code == 259 {
+                all_stopped = false;
+            }
+        }
+        if all_stopped {
+            return Ok(());
+        }
+        if started.elapsed() >= Duration::from_secs(30) {
+            return Err(Error::Health);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+// Read-only native MSI properties before any native installer starts. The signed
+// payload itself still remains pinned read-only throughout the transaction.
+#[link(name = "msi")]
+extern "system" {
+    fn MsiOpenDatabaseW(path: *const u16, persist: *const u16, database: *mut u32) -> u32;
+    fn MsiDatabaseOpenViewW(database: u32, query: *const u16, view: *mut u32) -> u32;
+    fn MsiViewExecute(view: u32, record: u32) -> u32;
+    fn MsiViewFetch(view: u32, record: *mut u32) -> u32;
+    fn MsiRecordGetStringW(record: u32, field: u32, buffer: *mut u16, length: *mut u32) -> u32;
+    fn MsiCloseHandle(handle: u32) -> u32;
+}
+struct MsiHandle(u32);
+impl Drop for MsiHandle {
+    fn drop(&mut self) {
+        unsafe {
+            MsiCloseHandle(self.0);
+        }
+    }
+}
+fn msi_property(database: u32, name: &str) -> Result<String, Error> {
+    if !matches!(
+        name,
+        "ProductName" | "Manufacturer" | "ProductVersion" | "UpgradeCode" | "ALLUSERS"
+    ) {
+        return Err(Error::Trust);
+    }
+    let query = wide(&format!(
+        "SELECT `Value` FROM `Property` WHERE `Property` = '{name}'"
+    ));
+    let mut view = MsiHandle(0);
+    if unsafe { MsiDatabaseOpenViewW(database, query.as_ptr(), &mut view.0) } != 0
+        || unsafe { MsiViewExecute(view.0, 0) } != 0
+    {
+        return Err(Error::Installer);
+    }
+    let mut record = MsiHandle(0);
+    if unsafe { MsiViewFetch(view.0, &mut record.0) } != 0 {
+        return Err(Error::Installer);
+    }
+    let mut buffer = [0u16; 1024];
+    let mut length = buffer.len() as u32;
+    if unsafe { MsiRecordGetStringW(record.0, 1, buffer.as_mut_ptr(), &mut length) } != 0
+        || length >= buffer.len() as u32
+    {
+        return Err(Error::Installer);
+    }
+    String::from_utf16(&buffer[..length as usize]).map_err(|_| Error::Installer)
+}
+fn validate_msi(path: &std::path::Path, sequence: u64) -> Result<(), Error> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut database = MsiHandle(0);
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe { MsiOpenDatabaseW(path.as_ptr(), std::ptr::null(), &mut database.0) } != 0 {
+        return Err(Error::Installer);
+    }
+    let version = format!(
+        "{}.{}.{}",
+        sequence >> 24,
+        (sequence >> 16) & 255,
+        sequence & 65535
+    );
+    let upgrade = option_env!("ONGROW_MSI_UPGRADE_CODE").ok_or(Error::Policy)?;
+    if msi_property(database.0, "ProductName")? != "OnGROW Support Desk"
+        || msi_property(database.0, "Manufacturer")? != "OnGROW GmbH"
+        || msi_property(database.0, "ProductVersion")? != version
+        || msi_property(database.0, "ALLUSERS")? != "1"
+        || msi_property(database.0, "UpgradeCode")?.trim_matches(['{', '}']) != upgrade
+    {
+        return Err(Error::Installer);
+    }
+    Ok(())
+}
+
+#[derive(serde_derive::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledPayload {
+    product: String,
+    sequence: u64,
+    source_sha: String,
+    sha256: std::collections::BTreeMap<String, String>,
+}
+fn verify_installed_payload(sequence: u64, source: &str) -> Result<(), Error> {
+    let file = session_gate::windows_bootstrap::payload_file("ongrow-installed-payload.json")?;
+    if file.metadata().map_err(|_| Error::Health)?.len() > 1024 * 1024 {
+        return Err(Error::Health);
+    }
+    let mut raw = Vec::new();
+    file.take(1024 * 1024 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|_| Error::Health)?;
+    if raw.len() > 1024 * 1024 {
+        return Err(Error::Health);
+    }
+    let manifest: InstalledPayload = serde_json::from_slice(&raw).map_err(|_| Error::Health)?;
+    if manifest.product != "customer-desk"
+        || manifest.sequence != sequence
+        || manifest.source_sha != source
+        || manifest.sha256.is_empty()
+        || manifest.sha256.len() > 4096
+    {
+        return Err(Error::Health);
+    }
+    for required in [
+        "OnGROW Support Desk.exe",
+        "librustdesk.dll",
+        "flutter_windows.dll",
+        "ongrow-update.exe",
+        "data/icudtl.dat",
+        "data/flutter_assets/AssetManifest.json",
+    ] {
+        if !manifest.sha256.contains_key(required) {
+            return Err(Error::Health);
+        }
+    }
+    let mut aliases = std::collections::BTreeSet::new();
+    for (name, expected) in manifest.sha256 {
+        if !aliases.insert(name.to_ascii_lowercase())
+            || name == "ongrow-installed-payload.json"
+            || expected.len() != 64
+            || !expected
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+        {
+            return Err(Error::Health);
+        }
+        let file = session_gate::windows_bootstrap::payload_file(&name)?;
+        let actual = hash(&file)?
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        if actual != expected {
+            return Err(Error::Health);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod system_probe {
+    use super::*;
+    #[test]
+    #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
+    fn protected_desk_bootstrap_staging_and_pending() {
+        assert_eq!(
+            std::env::var("ONGROW_WINDOWS_SYSTEM_PROBE").as_deref(),
+            Ok("approved-disposable-runner")
+        );
+        session_gate::windows_bootstrap::system().unwrap();
+        assert!(
+            session_gate::windows_bootstrap::root().unwrap(),
+            "Fixture must be a fresh root"
+        );
+        let identity = InstallationIdentity::trusted(
+            Product::CustomerDesk,
+            Platform::WindowsX64,
+            Channel::Lab,
+            1,
+            &[0xab; 32],
+            "https://updates.example.com",
+            "/lab/",
+        )
+        .unwrap();
+        let store = ProtectedStore::bootstrap(identity).unwrap();
+        session_gate::initialize().unwrap();
+        let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
+        assert!(matches!(
+            store.snapshot().unwrap().state(),
+            LastAcceptedSequence::Known(1)
+        ));
+        let ready = session_gate::admit().unwrap();
+        assert!(matches!(
+            session_gate::begin_installation(),
+            Err(session_gate::Error::Busy)
+        ));
+        let mut scratch = root.create(Child::Payload).unwrap();
+        scratch.write_all(b"unsealed fixture").unwrap();
+        root.sync_file(&scratch).unwrap();
+        drop(scratch);
+        let stage = root.stage_lease().unwrap();
+        assert!(store.discard_ready(&ready).is_err());
+        assert!(root.read(Child::Payload).is_ok());
+        drop(stage);
+        store.discard_ready(&ready).unwrap();
+        assert!(matches!(
+            root.read(Child::Payload),
+            Err(session_gate::Error::MissingGate)
+        ));
+        drop(ready);
+        let transaction = session_gate::begin_installation().unwrap();
+        assert!(apply_pending());
+        assert!(matches!(
+            session_gate::admit(),
+            Err(session_gate::Error::Busy)
+        ));
+        drop(transaction);
+        assert!(matches!(
+            session_gate::admit(),
+            Err(session_gate::Error::Pending)
+        ));
+        assert!(session_gate::initialize().is_err());
+        assert!(apply_pending());
+        // Dispose only this freshly created synthetic root, after all handles
+        // close. No production cleanup/reset API gains gate/state authority.
+        let path = root.path(Child::StageLock).parent().unwrap().to_owned();
+        drop(root);
+        drop(store);
+        for name in [
+            "admission-v1.lock",
+            "state-v1.journal",
+            "staging-v1.lock",
+            "accepted-sequence-v1",
+        ] {
+            std::fs::remove_file(path.join(name)).unwrap();
+        }
+        std::fs::remove_dir(path).unwrap();
+        println!("NATIVE_SYSTEM_DESK_BOOTSTRAP_STAGE_PENDING_PASS");
     }
 }

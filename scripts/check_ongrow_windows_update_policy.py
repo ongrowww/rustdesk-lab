@@ -10,6 +10,7 @@ def validate(env):
     if any(env.get(k)!=v for k,v in expected.items()): raise ValueError('Missing Windows updater product policy')
     if not re.fullmatch('[1-9][0-9]*',env.get('ONGROW_RELEASE_SEQUENCE','')) or int(env['ONGROW_RELEASE_SEQUENCE'])>2**32-1: raise ValueError('Invalid release sequence')
     if not re.fullmatch('[0-9a-f]{40}',env.get('ONGROW_RELEASE_SOURCE_SHA','')): raise ValueError('Invalid source revision')
+    if not re.fullmatch('[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}',env.get('ONGROW_MSI_UPGRADE_CODE','')): raise ValueError('Invalid MSI upgrade identity')
     key=env.get('ONGROW_UPDATE_PUBLIC_KEY_HEX','')
     if not re.fullmatch('[0-9a-f]{64}',key) or key=='0'*64: raise ValueError('Invalid release public key')
     origin=env.get('ONGROW_UPDATE_ORIGIN','')

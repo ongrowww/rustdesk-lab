@@ -800,6 +800,13 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
 }
 
 async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<HANDLE> {
+    #[cfg(ongrow_windows_integration)]
+    if crate::ongrow_update::windows_integration::apply_pending() {
+        // The existing server closes itself after Pending. Do not relaunch its
+        // old image while the independent guardian is replacing the MSI.
+        return Ok(NULL);
+    }
+
     if close_first {
         // in case started some elsewhere
         send_close_async("").await.ok();

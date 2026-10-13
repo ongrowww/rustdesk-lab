@@ -21,12 +21,21 @@ fixed protected slot. The guardian survives the service being stopped by MSI,
 uses the original signed transport/store and re-verifies the ticket. A held
 session blocks installation. The guardian durably records Pending before
 starting MSI and retains both the gate and read-only MSI handles through native
-installation and loaded-service health checks. MSI timeout never kills a native
+installation and loaded-service health checks. Each old Desk GUI/server closes
+itself in its own session when the protected Pending journal appears. A separate
+user helper waits outside the replacement tree and reopens the GUI/tray only
+after Ready. The service defers server relaunch while Pending; the guardian
+checks actual old process handles have exited before native installation. MSI timeout never kills a native
 transaction or opens admission.
 
 Health requires the SCM's running service PID, its process creation time,
 installed executable path, protected executable/core files and the service's
-loaded sequence/revision. Installer exit, a changed file hash, or a stale marker
+loaded sequence/revision. A package-generated owned-payload manifest checks the
+bytes of all declared runtime/assets, without reading application configuration.
+A known failed MSI caller can reopen admission only after the previous loaded
+service and all its old payload hashes prove rollback. Unknown caller timeout
+keeps Pending. Unsealed/expired pre-install scratch can be discarded only under
+a real Ready admission lease and the independent stage lock. Installer exit, a changed file hash, or a stale marker
 cannot open admission. Only then is the accepted sequence replaced atomically,
 staging cleaned and Ready recorded. Pending recovery accepts an authenticated
 same-release attempt only under an exclusive recovery transaction. A crash

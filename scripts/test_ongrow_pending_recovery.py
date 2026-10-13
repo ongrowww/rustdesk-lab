@@ -68,6 +68,7 @@ SCOPE = (
     'src/ongrow_update/windows_integration.rs',
     'src/ongrow_update/protected_store/windows_apply.rs',
     'src/platform/windows.rs',
+    'src/core_main.rs',
     'scripts/check_ongrow_windows_update_policy.py',
     'scripts/test_ongrow_windows_update_policy.py',
     '.github/workflows/ongrow-windows-update-integration.yml',
