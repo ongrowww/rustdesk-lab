@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          git diff --exit-code 8be346aff0a8a423af51c85d0faa6d66f05c5b07 "$SOURCE_SHA" -- . \
+          git diff --exit-code cbfdf20b9b67fe336185d8cb66bfa6c141819260 "$SOURCE_SHA" -- . \
             ':(exclude).gitattributes' \
             ':(exclude)scripts/package_ongrow_windows_setup.py' \
             ':(exclude)scripts/package_ongrow_windows_msi.py' \

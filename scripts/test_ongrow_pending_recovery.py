@@ -17,7 +17,7 @@ from test_ongrow_update_session_gate import windows_probe_state_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "scripts/fixtures/ongrow_pending_recovery_probe/lib.rs"
-BASELINE = "8be346aff0a8a423af51c85d0faa6d66f05c5b07"
+BASELINE = "cbfdf20b9b67fe336185d8cb66bfa6c141819260"
 NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (

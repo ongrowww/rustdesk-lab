@@ -56,8 +56,6 @@ an updater-enabled customer MSI. Guardian compilation and prior probe installer
 success alone do not establish that product-level update proof. The Console and
 macOS update activation paths are separate.
 
-## Guardian integration boundary
-
 ## RustDesk 1.5.0 connection lifetimes
 
 The 1.5.0 identity handshake keeps its unauthenticated connection limits and
