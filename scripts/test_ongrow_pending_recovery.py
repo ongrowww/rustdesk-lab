@@ -76,6 +76,7 @@ SCOPE = (
     'tools/windows-update-guardian/Cargo.lock',
     'tools/windows-update-guardian/src/main.rs',
     'tools/windows-update-guardian/.gitignore',
+    'scripts/test_ongrow_windows_desk_update.ps1',
 )
 
 OLD_ADDITIONS = {

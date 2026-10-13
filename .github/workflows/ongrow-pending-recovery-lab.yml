@@ -100,7 +100,8 @@ jobs:
             ':(exclude)tools/windows-update-guardian/Cargo.toml' \
             ':(exclude)tools/windows-update-guardian/Cargo.lock' \
             ':(exclude)tools/windows-update-guardian/src/main.rs' \
-            ':(exclude)tools/windows-update-guardian/.gitignore'
+            ':(exclude)tools/windows-update-guardian/.gitignore' \
+            ':(exclude)scripts/test_ongrow_windows_desk_update.ps1'
 
       - name: Isolated probe Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1

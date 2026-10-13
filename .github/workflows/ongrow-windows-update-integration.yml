@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 20
     env:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      RUSTFLAGS: --cfg ongrow_windows_integration -C target-feature=+crt-static
+      RUSTFLAGS: --cfg ongrow_windows_integration --cfg ongrow_session_gate_probe -C target-feature=+crt-static
       ONGROW_PRODUCT_ROLE: customer-desk
       ONGROW_WINDOWS_UPDATER: v1
       ONGROW_UPDATE_SESSION_GATE: v1
@@ -78,6 +78,7 @@ jobs:
             if (Test-Path $output) {
               foreach ($line in Get-Content -LiteralPath $output) {
                 if ($line -match '^SYSTEM_PROBE_PHASE:(SYSTEM|ROOT|STORE|GATE|STAGE|PENDING|CLEANUP)$') { Write-Output $line }
+                if ($line -match '^ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+$') { Write-Output $line }
                 if ($line -match 'called .*unwrap.*Err.*(Untrusted|Disabled|State|Io)') { Write-Output ('SYSTEM_PROBE_REJECT='+$Matches[1]) }
               }
             } else { Write-Output 'SYSTEM_PROBE_NO_OUTPUT' }

@@ -2,6 +2,15 @@ name: OnGROW real Windows product MSI installation
 
 on:
   workflow_dispatch:
+    inputs:
+      baseline_run:
+        description: Optional successful updater-enabled Desk build run
+        required: false
+        type: string
+      candidate_run:
+        description: Optional newer Desk build published to signed Lab feed
+        required: false
+        type: string
   pull_request:
     paths:
       - 'scripts/test_ongrow_windows_product_msi.ps1'
@@ -12,6 +21,58 @@ permissions:
   actions: read
 
 jobs:
+  actual-desk-update:
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_run != '' && inputs.candidate_run != ''
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve exact successful real Desk artifacts
+        id: builds
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        env:
+          BASELINE_RUN: ${{ inputs.baseline_run }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        with:
+          script: |
+            for (const [label, raw] of [['baseline', process.env.BASELINE_RUN], ['candidate', process.env.CANDIDATE_RUN]]) {
+              if (!/^[1-9][0-9]*$/.test(raw)) throw new Error('Invalid real build run');
+              const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: Number(raw)});
+              if (run.repository.full_name !== 'ongrowww/rustdesk-lab' || run.head_repository.full_name !== run.repository.full_name ||
+                  run.path !== '.github/workflows/ongrow-lab-windows-x64.yml' || run.conclusion !== 'success' ||
+                  run.event !== 'workflow_dispatch') throw new Error('Untrusted real Desk build');
+              const name = `ongrow-support-desk-msi-${run.run_number}-windows-x64`;
+              const {data: artifacts} = await github.rest.actions.listWorkflowRunArtifacts({...context.repo, run_id: Number(raw)});
+              if (artifacts.artifacts.filter(a => a.name === name && !a.expired).length !== 1) throw new Error('Exact real Desk MSI unavailable');
+              core.setOutput(`${label}_artifact`, name);
+              core.setOutput(`${label}_sha`, run.head_sha);
+            }
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ steps.builds.outputs.baseline_artifact }}
+          path: ${{ runner.temp }}/desk-baseline
+          run-id: ${{ inputs.baseline_run }}
+          github-token: ${{ github.token }}
+          repository: ongrowww/rustdesk-lab
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ steps.builds.outputs.candidate_artifact }}
+          path: ${{ runner.temp }}/desk-candidate
+          run-id: ${{ inputs.candidate_run }}
+          github-token: ${{ github.token }}
+          repository: ongrowww/rustdesk-lab
+      - name: Actual signed scheduled product update
+        shell: pwsh
+        env:
+          ONGROW_CI_SMOKE_TEST: '1'
+        run: |
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/test_ongrow_windows_desk_update.ps1",[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) { throw 'Actual product update test syntax invalid' }
+          ./scripts/test_ongrow_windows_desk_update.ps1 -BaselineDirectory '${{ runner.temp }}/desk-baseline' -CandidateDirectory '${{ runner.temp }}/desk-candidate' -BaselineSha '${{ steps.builds.outputs.baseline_sha }}' -CandidateSha '${{ steps.builds.outputs.candidate_sha }}'
   product-install:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2022
