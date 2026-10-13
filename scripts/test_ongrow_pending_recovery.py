@@ -21,6 +21,8 @@ BASELINE = "e279d4e7490e7347ab1aab279052d5362e9eeba3"
 NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (
+    ".github/patches/ongrow-support-desk-hbb-common.patch",
+    "scripts/test_ongrow_product_profile.py",
     '.gitattributes',
     '.github/workflows/ongrow-update-store-lab.yml',
     '.github/workflows/ongrow-update-runtime-lab.yml',
