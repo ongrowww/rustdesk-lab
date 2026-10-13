@@ -30,6 +30,21 @@ pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
 
 
 class ProductProfileTests(unittest.TestCase):
+    def test_pinned_protocol_preserves_existing_attestation_wire_fields(self) -> None:
+        proto = Path(__file__).resolve().parents[1] / "libs/hbb_common/protos/rendezvous.proto"
+        if not proto.exists():
+            self.skipTest("full product build initializes the pinned hbb_common submodule")
+        actual = proto.read_text(encoding="utf-8")
+        self.assertIn("  bytes ongrow_attestation_nonce = 6;", actual)
+        self.assertIn("  OnGrowDeviceAttestation ongrow_device_attestation = 3;", actual)
+        self.assertIn(
+            "message OnGrowDeviceAttestation {\n"
+            "  string id = 1;\n  bytes device_pk = 2;\n  bytes uuid_sha256 = 3;\n"
+            "  int64 issued_at = 4;\n  int64 expires_at = 5;\n  bytes nonce = 6;\n"
+            "  bytes signed_payload = 7;\n}",
+            actual,
+        )
+
     def test_profile_patch_keeps_helper_and_regression_at_module_scope(self) -> None:
         root = Path(__file__).resolve().parents[1]
         submodule = root / "libs/hbb_common"

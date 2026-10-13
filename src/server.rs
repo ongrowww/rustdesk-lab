@@ -254,7 +254,6 @@ pub async fn create_tcp_connection(
         meta,
         unauthorized,
         session_lease,
-        session_lease,
     )
     .await;
     Ok(())

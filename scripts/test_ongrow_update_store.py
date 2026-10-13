@@ -84,6 +84,8 @@ class SourceTests(unittest.TestCase):
                 raw.decode("utf-8", errors="strict")
                 self.assertNotIn(b"\r\n", raw)
                 canonical[relative] = raw
+            patch = ".github/patches/ongrow-support-desk-hbb-common.patch"
+            canonical[patch] = (ROOT / patch).read_bytes()
             git(checkout, "init", "--template=" + str(template))
             git(checkout, "config", "core.autocrlf", "true")
             attributes = (ROOT / ".gitattributes").read_bytes()
@@ -98,6 +100,7 @@ class SourceTests(unittest.TestCase):
                 (checkout / relative).unlink()
             git(checkout, "checkout-index", "--all", "--force")
             self.assertEqual((checkout / "control.rs").read_bytes(), b"// checkout control\r\n")
+            self.assertEqual((checkout / patch).read_bytes(), canonical[patch])
             for name, digest in ORIGINAL.items():
                 relative = "src/ongrow_update/" + name
                 with self.subTest(source=name):

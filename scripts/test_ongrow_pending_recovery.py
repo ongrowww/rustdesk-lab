@@ -21,6 +21,8 @@ BASELINE = "e279d4e7490e7347ab1aab279052d5362e9eeba3"
 NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (
+    'libs/hbb_common',
+    'src/server.rs',
     ".github/patches/ongrow-support-desk-hbb-common.patch",
     "scripts/test_ongrow_product_profile.py",
     '.gitattributes',
@@ -140,6 +142,7 @@ class SourceTests(unittest.TestCase):
     def test_source_attributes_keep_exact_frozen_bytes_on_windows(self):
         self.assertEqual((ROOT / ".gitattributes").read_text(encoding="utf-8").encode("utf-8"),
                          b"* text=auto\n"
+                         b".github/patches/ongrow-support-desk-hbb-common.patch text eol=lf whitespace=-blank-at-eol\n"
                          b"src/ongrow_update/mod.rs text eol=lf\n"
                          b"src/ongrow_update/session_gate.rs text eol=lf\n"
                          b"src/ongrow_update/session_gate/macos.rs text eol=lf\n"

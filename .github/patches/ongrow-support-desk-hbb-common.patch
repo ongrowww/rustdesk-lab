@@ -5,7 +5,7 @@ index 6fe1004..1b29ecf 100644
 @@ -122,6 +122,32 @@ pub const RELAY_PORT: i32 = 21117;
  pub const WS_RENDEZVOUS_PORT: i32 = 21118;
  pub const WS_RELAY_PORT: i32 = 21119;
-
+ 
 +fn select_rendezvous_servers(
 +    executable: &str,
 +    explicit_user: &str,
@@ -37,7 +37,7 @@ index 6fe1004..1b29ecf 100644
      // `_service` is a protected cross-user IPC channel used by the root service.
 @@ -931,30 +957,19 @@ impl Config {
      }
-
+ 
      pub fn get_rendezvous_servers() -> Vec<String> {
 -        let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
 -        if !s.is_empty() {
@@ -76,12 +76,12 @@ index 6fe1004..1b29ecf 100644
 +            RENDEZVOUS_SERVERS,
 +        )
      }
-
+ 
      pub fn reset_online() {
 @@ -2940,6 +2955,55 @@ impl Status {
  mod tests {
      use super::{permanent_password::PERMANENT_PASSWORD_ENC_VERSION, *};
-
+ 
 +    #[test]
 +    fn test_ongrow_rendezvous_precedence_and_fail_closed_fallback() {
 +        let public_fallback = ["rs-ny.rustdesk.com"];
@@ -132,5 +132,5 @@ index 6fe1004..1b29ecf 100644
 +    }
 +
      static CONFIG_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
+ 
      struct ConfigStateTestGuard {
