@@ -21,6 +21,7 @@ BASELINE = "8be346aff0a8a423af51c85d0faa6d66f05c5b07"
 NATIVE_DECLARATION = "#[cfg(all(test, ongrow_native_apply_probe, any(target_os = \"macos\", target_os = \"windows\")))]\n#[path = \"native_apply_tests.rs\"]\nmod native_apply_tests;\n"
 PENDING_GATE_FREEZE = (3430, "e3c292b8fd59b2f93be703a01192235fa09869c80939a7001b327b26601aebb9")
 SCOPE = (
+    '.gitattributes',
     'scripts/package_ongrow_windows_setup.py',
     'scripts/package_ongrow_windows_msi.py',
     'scripts/test_ongrow_windows_msi.py',
@@ -132,6 +133,15 @@ def frozen_addition(name):
 
 
 class SourceTests(unittest.TestCase):
+    def test_source_attributes_keep_exact_frozen_bytes_on_windows(self):
+        self.assertEqual((ROOT / ".gitattributes").read_bytes(),
+                         b"* text=auto\n"
+                         b"src/ongrow_update/mod.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate/macos.rs text eol=lf\n"
+                         b"src/ongrow_update/session_gate/windows.rs text eol=lf\n"
+                         b"src/ongrow_update/runtime.rs text eol=lf\n")
+
     def test_signed_verifier_stays_byte_frozen_outside_new_windows_module(self):
         raw=(ROOT / "src/ongrow_update/mod.rs").read_bytes().split(b"\n",1)[1]
         extension=b'#[cfg(all(target_os = "windows", ongrow_windows_integration))]\npub(crate) mod windows_integration;\n'
