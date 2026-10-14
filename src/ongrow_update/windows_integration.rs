@@ -937,7 +937,7 @@ mod system_probe {
             Ok("approved-disposable-runner")
         );
         session_gate::windows_bootstrap::system().unwrap();
-        eprintln!("SYSTEM_ADMISSION_ISOLATED:{}", isolated());
+        eprintln!("\nSYSTEM_ADMISSION_ISOLATED:{}", isolated());
         let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
         eprintln!("SYSTEM_ADMISSION_PHASE:ROOT");
         let _lease = root.stage_lease().unwrap();
@@ -945,6 +945,19 @@ mod system_probe {
         let _source =
             session_gate::windows_bootstrap::installed_file("ongrow-update.exe").unwrap();
         eprintln!("SYSTEM_ADMISSION_PHASE:INSTALLED_FILE");
+        let _executable = session_gate::windows_bootstrap::system_executable("msiexec.exe").unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:MSIEXEC");
+        match root.read(Child::Installer) {
+            Ok(_file) => {
+                let sequence = std::env::var("ONGROW_WINDOWS_CANDIDATE_SEQUENCE")
+                    .unwrap().parse::<u64>().unwrap();
+                validate_msi(&root.path(Child::Installer), sequence).unwrap();
+                eprintln!("SYSTEM_ADMISSION_PHASE:MSI_VALIDATED");
+            }
+            Err(session_gate::Error::MissingGate) =>
+                eprintln!("SYSTEM_ADMISSION_PHASE:INSTALLER_ABSENT"),
+            Err(error) => panic!("Read-only installer access rejected: {error:?}"),
+        }
         println!("SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS");
     }
 

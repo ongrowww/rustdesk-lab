@@ -71,9 +71,16 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
 }
 if (-not $updated) {
-    foreach ($name in @('admission-v1.lock', 'state-v1.journal', 'accepted-sequence-v1', 'stage-v1.payload', 'attempt-v1.signed', 'native-attempt-v1', 'service-health-v1', 'update-guardian-v1.exe')) {
+    foreach ($name in @('admission-v1.lock', 'state-v1.journal', 'accepted-sequence-v1', 'stage-v1.payload', 'attempt-v1.signed', 'installer-v1.msi', 'native-attempt-v1', 'service-health-v1', 'update-guardian-v1.exe')) {
         Write-Output ('UPDATE_FIXTURE_FILE_' + $name + '=' + [bool](Test-Path (Join-Path $state $name)))
     }
+    $journalPath = Join-Path $state 'state-v1.journal'
+    if (Test-Path $journalPath) {
+        $journal = [IO.File]::ReadAllBytes($journalPath)
+        Write-Output ('UPDATE_FIXTURE_JOURNAL_READY=' + [bool]($journal.Length -eq 1 -and $journal[0] -eq 0))
+        Write-Output ('UPDATE_FIXTURE_JOURNAL_PENDING=' + [bool]($journal.Length -eq 1 -and $journal[0] -eq 1))
+    }
+    Write-Output ('UPDATE_FIXTURE_ORIGINAL_GUI_ALIVE=' + [bool](-not $gui.HasExited))
     $service = Get-CimInstance Win32_Service -Filter "Name='OnGROW Support Desk'"
     Write-Output ('UPDATE_FIXTURE_SERVICE_RUNNING=' + [bool]($service -and $service.State -eq 'Running'))
     $healthPath = Join-Path $state 'service-health-v1'

@@ -83,6 +83,7 @@ jobs:
         shell: pwsh
         env:
           RUSTFLAGS: --cfg ongrow_windows_integration --cfg ongrow_session_gate_probe -C target-feature=+crt-static
+          ONGROW_MSI_UPGRADE_CODE: ${{ vars.ONGROW_MSI_DESK_UPGRADE_CODE }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           cargo test --locked --manifest-path tools/windows-update-guardian/Cargo.toml --no-run
@@ -98,8 +99,12 @@ jobs:
           $script=Join-Path $directory 'run.ps1'
           $binary=$binaries[0].FullName.Replace("'","''")
           $result=$output.Replace("'","''")
+          $candidate=Get-Content -LiteralPath '${{ runner.temp }}/desk-candidate/package.json' -Raw | ConvertFrom-Json
+          $sequence=[string]$candidate.sequence
+          if ($sequence -notmatch '^[1-9][0-9]*$') { throw 'Exact candidate sequence required for read-only MSI check' }
           @"
           `$env:ONGROW_WINDOWS_SYSTEM_PROBE='approved-disposable-runner'
+          `$env:ONGROW_WINDOWS_CANDIDATE_SEQUENCE='$sequence'
           & '$binary' --ignored --exact ongrow_update::windows_integration::system_probe::installed_guardian_admission_is_read_only --nocapture *> '$result'
           exit `$LASTEXITCODE
           "@ | Set-Content -LiteralPath $script -Encoding utf8
@@ -117,7 +122,7 @@ jobs:
           Write-Output ('SYSTEM_ADMISSION_TASK_EXIT='+$info.LastTaskResult)
           if (Test-Path $output) {
             foreach ($line in Get-Content -LiteralPath $output) {
-              if ($line -match '^(SYSTEM_ADMISSION_(ISOLATED:(true|false)|PHASE:(ROOT|STAGE|INSTALLED_FILE))|SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS|ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+)$') { Write-Output $line }
+              if ($line -match '^(SYSTEM_ADMISSION_(ISOLATED:(true|false)|PHASE:(ROOT|STAGE|INSTALLED_FILE|MSIEXEC|MSI_VALIDATED|INSTALLER_ABSENT))|SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS|ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+)$') { Write-Output $line }
             }
           }
           if ($state -eq 'Running' -or $info.LastTaskResult -ne 0) { throw 'Read-only installed guardian admission failed; fixture retained' }
