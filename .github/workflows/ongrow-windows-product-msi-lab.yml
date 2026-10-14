@@ -65,6 +65,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: ongrowww/rustdesk-lab
       - name: Actual signed scheduled product update
+        id: actual_update
         shell: pwsh
         env:
           ONGROW_CI_SMOKE_TEST: '1'
@@ -73,6 +74,54 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/test_ongrow_windows_desk_update.ps1",[ref]$tokens,[ref]$errors) | Out-Null
           if ($errors.Count -ne 0) { throw 'Actual product update test syntax invalid' }
           ./scripts/test_ongrow_windows_desk_update.ps1 -BaselineDirectory '${{ runner.temp }}/desk-baseline' -CandidateDirectory '${{ runner.temp }}/desk-candidate' -BaselineSha '${{ steps.builds.outputs.baseline_sha }}' -CandidateSha '${{ steps.builds.outputs.candidate_sha }}'
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        if: failure() && steps.actual_update.outcome == 'failure'
+        with:
+          toolchain: '1.81.0'
+      - name: Compile read-only native admission diagnostic
+        if: failure() && steps.actual_update.outcome == 'failure'
+        shell: pwsh
+        env:
+          RUSTFLAGS: --cfg ongrow_windows_integration --cfg ongrow_session_gate_probe -C target-feature=+crt-static
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --manifest-path tools/windows-update-guardian/Cargo.toml --no-run
+      - name: Read-only installed guardian admission as LocalSystem
+        if: failure() && steps.actual_update.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $binaries=@(Get-ChildItem tools/windows-update-guardian/target/debug/deps/ongrow_windows_update_guardian-*.exe)
+          if ($binaries.Count -ne 1) { throw 'Exact diagnostic executable required' }
+          $directory=Join-Path $env:RUNNER_TEMP 'ongrow-read-only-admission'
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $output=Join-Path $directory 'result.txt'
+          $script=Join-Path $directory 'run.ps1'
+          $binary=$binaries[0].FullName.Replace("'","''")
+          $result=$output.Replace("'","''")
+          @"
+          `$env:ONGROW_WINDOWS_SYSTEM_PROBE='approved-disposable-runner'
+          & '$binary' --ignored --exact ongrow_update::windows_integration::system_probe::installed_guardian_admission_is_read_only --nocapture *> '$result'
+          exit `$LASTEXITCODE
+          "@ | Set-Content -LiteralPath $script -Encoding utf8
+          $action=New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe') -Argument ('-NoProfile -NonInteractive -File "'+$script+'"')
+          $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+          $task='OnGROW read-only installed guardian admission'
+          Register-ScheduledTask -TaskName $task -Action $action -Principal $principal | Out-Null
+          Start-ScheduledTask -TaskName $task
+          $deadline=[DateTime]::UtcNow.AddMinutes(3)
+          do {
+            Start-Sleep -Seconds 1
+            $info=Get-ScheduledTaskInfo -TaskName $task
+            $state=(Get-ScheduledTask -TaskName $task).State
+          } while (($state -eq 'Running' -or $info.LastTaskResult -eq 0x41301 -or $info.LastRunTime.Year -lt 2020) -and [DateTime]::UtcNow -lt $deadline)
+          Write-Output ('SYSTEM_ADMISSION_TASK_EXIT='+$info.LastTaskResult)
+          if (Test-Path $output) {
+            foreach ($line in Get-Content -LiteralPath $output) {
+              if ($line -match '^(SYSTEM_ADMISSION_(ISOLATED:(true|false)|PHASE:(ROOT|STAGE|INSTALLED_FILE))|SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS|ONGROW_GATE_(REJECT|REJECT_CONTEXT|OWNER|ACCESS_PRINCIPAL|ACCESS_RIGHT):[a-z-]+)$') { Write-Output $line }
+            }
+          }
+          if ($state -eq 'Running' -or $info.LastTaskResult -ne 0) { throw 'Read-only installed guardian admission failed; fixture retained' }
+          Unregister-ScheduledTask -TaskName $task -Confirm:$false
   product-install:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-2022

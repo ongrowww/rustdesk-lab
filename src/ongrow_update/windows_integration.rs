@@ -929,6 +929,25 @@ fn verify_installed_payload(sequence: u64, source: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod system_probe {
     use super::*;
+    #[test]
+    #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
+    fn installed_guardian_admission_is_read_only() {
+        assert_eq!(
+            std::env::var("ONGROW_WINDOWS_SYSTEM_PROBE").as_deref(),
+            Ok("approved-disposable-runner")
+        );
+        session_gate::windows_bootstrap::system().unwrap();
+        eprintln!("SYSTEM_ADMISSION_ISOLATED:{}", isolated());
+        let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:ROOT");
+        let _lease = root.stage_lease().unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:STAGE");
+        let _source =
+            session_gate::windows_bootstrap::installed_file("ongrow-update.exe").unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:INSTALLED_FILE");
+        println!("SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
     async fn protected_desk_bootstrap_staging_and_pending() {
