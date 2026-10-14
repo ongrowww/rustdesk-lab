@@ -29,9 +29,13 @@ installation and loaded-service health checks. Each old Desk GUI/server closes
 itself in its own session when the protected Pending journal appears. A separate
 user helper waits outside the replacement tree and reopens the GUI/tray only
 after Ready. The service defers server relaunch while Pending; the guardian
-checks actual old process handles have exited before native installation. MSI timeout never kills a native
-transaction or opens admission. A durable native-attempt record is flushed
-before launch and atomically replaced with the known caller exit before health
+checks actual old process handles have exited before native installation. The
+independent guardian invokes `MsiInstallProductW` with silent UI and suppressed
+reboot, retaining the client until the API returns. It does not terminate a live
+API client on a deadline. The original strict payload ACL, owner and hardlink
+checks remain unchanged; no system executable is copied or its permissions relaxed.
+A durable native-attempt record is flushed before the native call and atomically
+replaced with its actual result before health
 can commit. A Started/partial/unknown record remains Pending after guardian
 loss; neither a PID, mutex observation nor a newly running service substitutes
 for known completion. This uncertain case needs explicit operator recovery.
