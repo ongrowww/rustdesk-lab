@@ -213,7 +213,9 @@ def generate(product, sequence, upstream, sha, files, probe=False):
                 dirs[key] = xml(dirs[parent], "Directory", Id=identifier("d", key), Name=pieces[i-1])
         cid, fid = identifier("c", rel), identifier("f", rel)
         comp = xml(dirs["/".join(pieces[:-1])], "Component", Id=cid, Guid=identity(product, "file/" + rel, probe), Bitness="always64")
-        xml(comp, "File", Id=fid, Name=pieces[-1], Source="payload/" + rel, KeyPath="yes" if product == "customer-desk" else "no")
+        file = xml(comp, "File", Id=fid, Name=pieces[-1], Source="payload/" + rel, KeyPath="yes" if product == "customer-desk" else "no")
+        if product == "customer-desk" and not probe:
+            xml(file, "PermissionEx", Sddl="O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)")
         if product == "support-console":
             # Per-user components have HKCU registry KeyPaths (MSI ICE38).
             xml(comp, "RegistryValue", Root="HKCU", Key=p["registry"] + "\\Components", Name=cid,
@@ -224,6 +226,13 @@ def generate(product, sequence, upstream, sha, files, probe=False):
                 Start="auto", ErrorControl="normal", Account="LocalSystem", Arguments="--service", Vital="yes")
             xml(comp, "ServiceControl", Id="OwnServiceControl", Name=p["name"], Start="install", Stop="both", Remove="uninstall", Wait="yes")
     registry = xml(install, "Component", Id="OwnPackageRegistry", Guid=identity(product, "package-registry", probe), Bitness="always64")
+    if product == "customer-desk" and not probe:
+        # The installed payload must meet the same strict trust policy as the
+        # update store, without inheriting Program Files' TrustedInstaller ACE.
+        for directory in dirs.values():
+            folder = xml(registry, "CreateFolder", Directory=directory.attrib["Id"])
+            xml(folder, "PermissionEx", Id=identifier("a", directory.attrib["Id"]),
+                Sddl="O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;AU)")
     hive = "HKLM" if product == "customer-desk" else "HKCU"
     xml(registry, "RegistryValue", Root=hive, Key=p["registry"], Name="Sequence", Type="string", Value=str(sequence), KeyPath="yes")
     xml(registry, "RegistryValue", Root=hive, Key=p["registry"], Name="Version", Type="string", Value=version(sequence))
