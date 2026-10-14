@@ -982,7 +982,7 @@ mod system_probe {
         assert!(!missing_package.exists());
         let code = native_install_msi(&missing_package).unwrap();
         eprintln!("SYSTEM_PROBE_MSI_CODE:{code}");
-        assert_eq!(code, 1619);
+        assert_eq!(code, 2); // ERROR_FILE_NOT_FOUND from the native client.
         assert!(!missing_package.exists());
         eprintln!("SYSTEM_PROBE_PHASE:MSI_API");
         assert!(matches!(
