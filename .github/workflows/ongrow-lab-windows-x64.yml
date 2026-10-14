@@ -300,7 +300,7 @@ jobs:
       - name: Real LocalSystem desktop gate and mux teardown
         shell: pwsh
         run: |
-          $binaries=@(Get-ChildItem target/debug/deps/rustdesk-*.exe)
+          $binaries=@(Get-ChildItem target/debug/deps/librustdesk-*.exe)
           if ($binaries.Count -ne 1) { throw 'Exact native test executable required' }
           $cases=& $binaries[0].FullName --list | Out-String
           if ($LASTEXITCODE -ne 0 -or -not $cases.Contains('ongrow_update::windows_integration::system_probe::protected_desk_bootstrap_staging_and_pending: test')) { throw 'Native System test was not compiled' }
