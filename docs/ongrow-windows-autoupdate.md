@@ -29,9 +29,13 @@ installation and loaded-service health checks. Each old Desk GUI/server closes
 itself in its own session when the protected Pending journal appears. A separate
 user helper waits outside the replacement tree and reopens the GUI/tray only
 after Ready. The service defers server relaunch while Pending; the guardian
-checks actual old process handles have exited before native installation. MSI timeout never kills a native
-transaction or opens admission. A durable native-attempt record is flushed
-before launch and atomically replaced with the known caller exit before health
+checks actual old process handles have exited before native installation. The
+independent guardian invokes `MsiInstallProductW` with silent UI and suppressed
+reboot, retaining the client until the API returns. It does not terminate a live
+API client on a deadline. The original strict payload ACL, owner and hardlink
+checks remain unchanged; no system executable is copied or its permissions relaxed.
+A durable native-attempt record is flushed before the native call and atomically
+replaced with its actual result before health
 can commit. A Started/partial/unknown record remains Pending after guardian
 loss; neither a PID, mutex observation nor a newly running service substitutes
 for known completion. This uncertain case needs explicit operator recovery.
@@ -55,6 +59,18 @@ This path needs a native test with the actual two Desk builds before releasing
 an updater-enabled customer MSI. Guardian compilation and prior probe installer
 success alone do not establish that product-level update proof. The Console and
 macOS update activation paths are separate.
+
+## RustDesk 1.5.0 connection lifetimes
+
+The 1.5.0 identity handshake keeps its unauthenticated connection limits and
+receives the same earlier kernel admission lease. The connection retains a
+clone for its full lifetime. New multiplexed forwarding retains the lease in
+the controlling tunnel handle and in every controlled channel task; dropping
+the listener or mux owner cannot release admission before socket teardown.
+Test-only constructors without a lease are unavailable in product builds.
+The full desktop's disposable LocalSystem fixture checks Busy after the mux
+owner is dropped but before its queued child runs, then permits Pending only
+after that child has actually released its native lease.
 
 ## Guardian integration boundary
 

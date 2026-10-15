@@ -153,6 +153,20 @@ class MsiTests(unittest.TestCase):
         self.assertTrue(all(v.attrib["On"] == "uninstall" for v in removals))
         self.assertTrue(all(v.attrib["Directory"] != "LocalAppDataFolder" for v in removals))
 
+    def test_desk_payload_has_protected_permissions(self):
+        desk = self.tree()
+        folder_sddl = "O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;AU)"
+        file_sddl = "O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)"
+        directories = {v.attrib["Id"] for v in desk.findall(".//w:Directory", NS)}
+        folders = desk.findall(".//w:CreateFolder", NS)
+        self.assertEqual({v.attrib["Directory"] for v in folders}, directories)
+        for folder in folders:
+            self.assertEqual(folder.find("w:PermissionEx", NS).attrib["Sddl"], folder_sddl)
+        for file in desk.findall(".//w:File", NS):
+            self.assertEqual(file.find("w:PermissionEx", NS).attrib["Sddl"], file_sddl)
+        for tree in (self.tree("support-console"), self.tree(probe=True)):
+            self.assertFalse(tree.findall(".//w:PermissionEx", NS))
+
     def test_console_custom_profile_directories_have_only_empty_uninstall_cleanup(self):
         for probe in (False, True):
             for sequence in (1, 2):

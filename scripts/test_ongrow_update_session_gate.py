@@ -282,7 +282,8 @@ class SessionGateTests(unittest.TestCase):
     def test_admission_precedes_effects_and_both_outgoing_callers_hold_lease(self):
         server = (ROOT / "src/server.rs").read_text().split("pub async fn create_tcp_connection(", 1)[1]
         self.assertLess(server.index("session_gate::admit()?"), server.index("Config::get_key_pair()"))
-        self.assertIn("meta, session_lease).await", server)
+        self.assertLess(server.index("session_gate::admit()?"), server.index("admit_unauthorized("))
+        self.assertIn("        unauthorized,\n        session_lease,", server)
         incoming = (ROOT / "src/server/connection.rs").read_text().split("pub async fn start(", 1)[1]
         self.assertLess(incoming.index("let _session_lease = session_lease"), incoming.index("ConnectionID::new"))
         ui = (ROOT / "src/ui_session_interface.rs").read_text().split("pub async fn io_loop<T:", 1)[1]
@@ -299,7 +300,14 @@ class SessionGateTests(unittest.TestCase):
         self.assertIn("run_forward(forward, stream, session_lease).await", forwarding)
         self.assertIn("Ok(Some((stream, session_lease)))", forwarding)
         self.assertIn("let _session_lease = session_lease;", forwarding)
-        self.assertEqual(sum(path.read_text().count("Client::start(") for path in [ROOT / "src/client/io_loop.rs", ROOT / "src/port_forward.rs"]), 2)
+        self.assertEqual(sum(path.read_text().count("Client::start(") for path in [ROOT / "src/client/io_loop.rs", ROOT / "src/port_forward.rs"]), 3)
+        self.assertIn("set_muxed_with_lease(outcome.stream, interface.clone(), outcome.session_lease)", forwarding)
+        self.assertIn("run_forward(forward, stream, outcome.session_lease).await", forwarding)
+        mux=(ROOT / "src/port_forward_mux.rs").read_text()
+        self.assertIn("_session_lease: lease,", mux)
+        controlled=(ROOT / "src/server/port_forward_mux.rs").read_text()
+        self.assertIn("self.session_lease.clone(),", controlled)
+        self.assertIn("let _session_lease = session_lease;", controlled)
 
     def test_os_state_is_never_automatically_reset_or_replaced(self):
         for platform in ["macos", "windows"]:

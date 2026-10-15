@@ -489,7 +489,6 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
     let code = match native {
         Some(code) => code,
         None => {
-            let executable = session_gate::windows_bootstrap::system_executable("msiexec.exe")?;
             let payload = ticket.installer_path()?;
             validate_msi(&payload, sequence)?;
             quiesce_apps().await?;
@@ -499,41 +498,11 @@ pub(crate) async fn check_once() -> Result<i32, Error> {
                 .map_err(|_| Error::Io)?;
             root.sync_file(&started)?;
             drop(started);
-            let launch = Command::new(executable)
-                .arg("/i")
-                .arg(payload)
-                .args(["/qn", "/norestart", "REBOOT=ReallySuppress"])
-                .creation_flags(0x08000000)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            let mut child = match launch {
-                Ok(child) => child,
-                Err(_) => {
-                    // No child exists on a failed CreateProcess. Record this
-                    // known non-start so authentic previous health may recover.
-                    root.replace(
-                        Child::NativeState,
-                        &native_record(ticket.manifest(), Some(1603)),
-                    )?;
-                    return Err(Error::Installer);
-                }
-            };
-            let began = Instant::now();
-            let code = loop {
-                match child.try_wait().map_err(|_| Error::Installer)? {
-                    Some(exit) => {
-                        break u32::try_from(exit.code().ok_or(Error::Installer)?)
-                            .map_err(|_| Error::Installer)?
-                    }
-                    None => {}
-                }
-                if began.elapsed() >= Duration::from_secs(600) {
-                    return Err(Error::Installer);
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            };
+            // The independent guardian remains the MSI client until completion.
+            // Ending this API client on timeout could abort a live transaction.
+            let code = tokio::task::spawn_blocking(move || native_install_msi(&payload))
+                .await
+                .map_err(|_| Error::Installer)??;
             root.replace(
                 Child::NativeState,
                 &native_record(ticket.manifest(), Some(code)),
@@ -589,6 +558,7 @@ mod tests {
         // GitHub's ordinary elevated runner is not LocalSystem. This rejects
         // before a state root, HTTP request, installer or deletion is possible.
         assert!(session_gate::windows_bootstrap::system().is_err());
+        assert!(native_install_msi(std::path::Path::new("untrusted-package.msi")).is_err());
     }
     #[test]
     fn a_file_or_unregistered_process_does_not_prove_service_health() {
@@ -789,16 +759,33 @@ async fn quiesce_apps() -> Result<(), Error> {
     }
 }
 
-// Read-only native MSI properties before any native installer starts. The signed
-// payload itself still remains pinned read-only throughout the transaction.
+// Native Windows Installer API. The signed payload remains pinned read-only
+// throughout validation and the transaction.
 #[link(name = "msi")]
 extern "system" {
+    fn MsiInstallProductW(path: *const u16, properties: *const u16) -> u32;
+    fn MsiSetInternalUI(level: u32, window: *mut *mut std::ffi::c_void) -> u32;
     fn MsiOpenDatabaseW(path: *const u16, persist: *const u16, database: *mut u32) -> u32;
     fn MsiDatabaseOpenViewW(database: u32, query: *const u16, view: *mut u32) -> u32;
     fn MsiViewExecute(view: u32, record: u32) -> u32;
     fn MsiViewFetch(view: u32, record: *mut u32) -> u32;
     fn MsiRecordGetStringW(record: u32, field: u32, buffer: *mut u16, length: *mut u32) -> u32;
     fn MsiCloseHandle(handle: u32) -> u32;
+}
+fn native_install_msi(path: &std::path::Path) -> Result<u32, Error> {
+    use std::os::windows::ffi::OsStrExt;
+    session_gate::windows_bootstrap::system()?;
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let properties = wide("REBOOT=ReallySuppress");
+    let previous = unsafe { MsiSetInternalUI(2, std::ptr::null_mut()) };
+    if previous == 0 {
+        return Err(Error::Installer);
+    }
+    let code = unsafe { MsiInstallProductW(path.as_ptr(), properties.as_ptr()) };
+    unsafe {
+        MsiSetInternalUI(previous, std::ptr::null_mut());
+    }
+    Ok(code)
 }
 struct MsiHandle(u32);
 impl Drop for MsiHandle {
@@ -929,6 +916,36 @@ fn verify_installed_payload(sequence: u64, source: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod system_probe {
     use super::*;
+    #[test]
+    #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
+    fn installed_guardian_admission_is_read_only() {
+        assert_eq!(
+            std::env::var("ONGROW_WINDOWS_SYSTEM_PROBE").as_deref(),
+            Ok("approved-disposable-runner")
+        );
+        session_gate::windows_bootstrap::system().unwrap();
+        eprintln!("\nSYSTEM_ADMISSION_ISOLATED:{}", isolated());
+        let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:ROOT");
+        let _lease = root.stage_lease().unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:STAGE");
+        let _source =
+            session_gate::windows_bootstrap::installed_file("ongrow-update.exe").unwrap();
+        eprintln!("SYSTEM_ADMISSION_PHASE:INSTALLED_FILE");
+        match root.read(Child::Installer) {
+            Ok(_file) => {
+                let sequence = std::env::var("ONGROW_WINDOWS_CANDIDATE_SEQUENCE")
+                    .unwrap().parse::<u64>().unwrap();
+                validate_msi(&root.path(Child::Installer), sequence).unwrap();
+                eprintln!("SYSTEM_ADMISSION_PHASE:MSI_VALIDATED");
+            }
+            Err(session_gate::Error::MissingGate) =>
+                eprintln!("SYSTEM_ADMISSION_PHASE:INSTALLER_ABSENT"),
+            Err(error) => panic!("Read-only installer access rejected: {error:?}"),
+        }
+        println!("SYSTEM_READ_ONLY_GUARDIAN_ADMISSION_PASS");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "only the explicit disposable LocalSystem CI action may run this"]
     async fn protected_desk_bootstrap_staging_and_pending() {
@@ -958,6 +975,16 @@ mod system_probe {
         eprintln!("SYSTEM_PROBE_PHASE:GATE");
         session_gate::initialize().unwrap();
         let root = ProtectedRoot::open(session_gate::Product::CustomerDesk).unwrap();
+        // Exercise the real LocalSystem MSI client without supplying a package.
+        // A native missing-package code proves the client is reachable; no
+        // customer or fixture product is installed by this regression.
+        let missing_package = root.path(Child::Installer);
+        assert!(!missing_package.exists());
+        let code = native_install_msi(&missing_package).unwrap();
+        eprintln!("SYSTEM_PROBE_MSI_CODE:{code}");
+        assert_eq!(code, 2); // ERROR_FILE_NOT_FOUND from the native client.
+        assert!(!missing_package.exists());
+        eprintln!("SYSTEM_PROBE_PHASE:MSI_API");
         assert!(matches!(
             store.snapshot().unwrap().state(),
             LastAcceptedSequence::Known(1)
@@ -983,6 +1010,9 @@ mod system_probe {
         ));
         drop(ready);
         eprintln!("SYSTEM_PROBE_PHASE:PENDING");
+        #[cfg(feature = "flutter")]
+        let transaction = crate::server::port_forward_mux::fixture_transaction_after_mux_teardown().await;
+        #[cfg(not(feature = "flutter"))]
         let transaction = session_gate::begin_installation().unwrap();
         assert!(apply_pending());
         assert!(matches!(

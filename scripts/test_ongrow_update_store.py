@@ -84,6 +84,8 @@ class SourceTests(unittest.TestCase):
                 raw.decode("utf-8", errors="strict")
                 self.assertNotIn(b"\r\n", raw)
                 canonical[relative] = raw
+            patch = ".github/patches/ongrow-support-desk-hbb-common.patch"
+            canonical[patch] = (ROOT / patch).read_bytes()
             git(checkout, "init", "--template=" + str(template))
             git(checkout, "config", "core.autocrlf", "true")
             attributes = (ROOT / ".gitattributes").read_bytes()
@@ -98,6 +100,7 @@ class SourceTests(unittest.TestCase):
                 (checkout / relative).unlink()
             git(checkout, "checkout-index", "--all", "--force")
             self.assertEqual((checkout / "control.rs").read_bytes(), b"// checkout control\r\n")
+            self.assertEqual((checkout / patch).read_bytes(), canonical[patch])
             for name, digest in ORIGINAL.items():
                 relative = "src/ongrow_update/" + name
                 with self.subTest(source=name):
@@ -252,7 +255,7 @@ class SourceTests(unittest.TestCase):
         runtime = (ROOT / ".github/workflows/ongrow-update-runtime-lab.yml").read_text(encoding="utf-8", errors="strict")
         self.assertIn("python scripts/test_ongrow_update_session_gate.py", runtime)
         self.assertIn("python scripts/test_ongrow_update_store.py --source-only", runtime)
-        self.assertIn('git diff --exit-code a620d13809b94cc2baa06bf77a4a741769ef413f "$SOURCE_SHA"', runtime)
+        self.assertIn('git diff --exit-code e279d4e7490e7347ab1aab279052d5362e9eeba3 "$SOURCE_SHA"', runtime)
         for active in (workflow, runtime):
             paths = active.split("    paths:\n", 1)[1].split("\npermissions:", 1)[0]
             self.assertIn("      - '.gitattributes'\n", paths)

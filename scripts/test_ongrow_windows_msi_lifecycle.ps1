@@ -84,6 +84,16 @@ function Assert-Tables([string]$Msi, [string]$Product, [bool]$Probe, [int]$Seque
         if ($props.ALLUSERS -ne '1') { throw 'Desk is not per-machine' }
     } elseif ($props.ContainsKey('ALLUSERS') -and $props.ALLUSERS -eq '1') { throw 'Console became per-machine' }
     $tableNames = @(Read-Rows $db 'SELECT `Name` FROM `_Tables`' @('Name') | ForEach-Object Name)
+    if ($Product -eq 'customer-desk' -and -not $Probe) {
+        $permissions = @(Read-Rows $db 'SELECT `LockObject`, `Table`, `SDDLText` FROM `MsiLockPermissionsEx`' @('Object','Table','Sddl'))
+        $files = @(Read-Rows $db 'SELECT `File` FROM `File`' @('Id'))
+        $folders = @(Read-Rows $db 'SELECT `Directory_` FROM `CreateFolder`' @('Id'))
+        if ($permissions.Count -ne $files.Count + $folders.Count) { throw 'Protected Desk MSI permission coverage missing' }
+        foreach ($row in $permissions) {
+            $expected = if ($row.Table -eq 'File') { 'O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;AU)' } elseif ($row.Table -eq 'CreateFolder') { 'O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;AU)' } else { throw 'Unexpected protected MSI target' }
+            if ($row.Sddl -cne $expected) { throw 'Protected Desk MSI permission mismatch' }
+        }
+    }
     $actions = @(if ($tableNames -contains 'CustomAction') { Read-Rows $db 'SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`' @('Action','Type','Source','Target') })
     if (-not $Probe -and $actions.Count -ne 0) { throw 'Production MSI has a custom action' }
     if ($Probe -and ($actions.Count -ne 1 -or $actions[0].Action -ne 'ProbeFailAfterWrite' -or $actions[0].Target -ne '--fail-update' -or ([int]$actions[0].Type -band 1024) -eq 0 -or ([int]$actions[0].Type -band 64) -ne 0)) { throw 'Probe action does not fail transactionally' }

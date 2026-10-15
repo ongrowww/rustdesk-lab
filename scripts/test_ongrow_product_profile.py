@@ -30,6 +30,48 @@ pub const RS_PUB_KEY: &str = "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
 
 
 class ProductProfileTests(unittest.TestCase):
+    def test_pinned_protocol_preserves_existing_attestation_wire_fields(self) -> None:
+        proto = Path(__file__).resolve().parents[1] / "libs/hbb_common/protos/rendezvous.proto"
+        if not proto.exists():
+            self.skipTest("full product build initializes the pinned hbb_common submodule")
+        actual = proto.read_text(encoding="utf-8")
+        self.assertIn("  bytes ongrow_attestation_nonce = 6;", actual)
+        self.assertIn("  OnGrowDeviceAttestation ongrow_device_attestation = 3;", actual)
+        self.assertIn(
+            "message OnGrowDeviceAttestation {\n"
+            "  string id = 1;\n  bytes device_pk = 2;\n  bytes uuid_sha256 = 3;\n"
+            "  int64 issued_at = 4;\n  int64 expires_at = 5;\n  bytes nonce = 6;\n"
+            "  bytes signed_payload = 7;\n}",
+            actual,
+        )
+
+    def test_profile_patch_keeps_helper_and_regression_at_module_scope(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        submodule = root / "libs/hbb_common"
+        if not (submodule / "src/config.rs").exists():
+            self.skipTest("full product build initializes the pinned hbb_common submodule")
+        pristine = subprocess.run(
+            ["git", "-C", str(submodule), "show", "HEAD:src/config.rs"],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        ).stdout
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "src/config.rs"
+            path.parent.mkdir()
+            path.write_text(pristine, encoding="utf-8")
+            subprocess.run(["git", "init", "-q", directory], capture_output=True, check=True)
+            subprocess.run(
+                ["git", "-C", directory, "apply", "--unidiff-zero",
+                 str(root / ".github/patches/ongrow-support-desk-hbb-common.patch")],
+                capture_output=True, check=True,
+            )
+            actual = path.read_text(encoding="utf-8")
+        self.assertIn("pub const WS_RELAY_PORT: i32 = 21119;\n\nfn select_rendezvous_servers(", actual)
+        self.assertIn(
+            "use super::{permanent_password::PERMANENT_PASSWORD_ENC_VERSION, *};\n\n"
+            "    #[test]\n    fn test_ongrow_rendezvous_precedence_and_fail_closed_fallback()",
+            actual,
+        )
+
     def make_config(self, source: str = FIXTURE) -> tuple[tempfile.TemporaryDirectory[str], Path]:
         directory = tempfile.TemporaryDirectory()
         path = Path(directory.name) / "config.rs"

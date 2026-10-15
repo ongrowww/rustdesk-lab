@@ -1,8 +1,11 @@
 diff --git a/src/config.rs b/src/config.rs
-index 707bbe0..6ea77ec 100644
+index 6fe1004..1b29ecf 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -127,0 +128,26 @@ pub const WS_RELAY_PORT: i32 = 21119;
+@@ -122,6 +122,32 @@ pub const RELAY_PORT: i32 = 21117;
+ pub const WS_RENDEZVOUS_PORT: i32 = 21118;
+ pub const WS_RELAY_PORT: i32 = 21119;
+ 
 +fn select_rendezvous_servers(
 +    executable: &str,
 +    explicit_user: &str,
@@ -29,7 +32,13 @@ index 707bbe0..6ea77ec 100644
 +    fallback.iter().map(|host| (*host).to_owned()).collect()
 +}
 +
-@@ -937,12 +963,3 @@ impl Config {
+ #[inline]
+ pub fn is_service_ipc_postfix(postfix: &str) -> bool {
+     // `_service` is a protected cross-user IPC channel used by the root service.
+@@ -931,30 +957,19 @@ impl Config {
+     }
+ 
+     pub fn get_rendezvous_servers() -> Vec<String> {
 -        let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
 -        if !s.is_empty() {
 -            return vec![s];
@@ -45,7 +54,7 @@ index 707bbe0..6ea77ec 100644
 +        let executable = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
 +        let explicit_user = Self::get_option("custom-rendezvous-server");
 +        let product = PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
-@@ -950,11 +967,9 @@ impl Config {
+         let serial_obsolute = CONFIG2.read().unwrap().serial > SERIAL;
 -        if serial_obsolute {
 -            let ss: Vec<String> = Self::get_option("rendezvous-servers")
 -                .split(',')
@@ -66,7 +75,13 @@ index 707bbe0..6ea77ec 100644
 +            &configured,
 +            RENDEZVOUS_SERVERS,
 +        )
-@@ -3289,0 +3305,49 @@ mod tests {
+     }
+ 
+     pub fn reset_online() {
+@@ -2940,6 +2955,55 @@ impl Status {
+ mod tests {
+     use super::{permanent_password::PERMANENT_PASSWORD_ENC_VERSION, *};
+ 
 +    #[test]
 +    fn test_ongrow_rendezvous_precedence_and_fail_closed_fallback() {
 +        let public_fallback = ["rs-ny.rustdesk.com"];
@@ -116,3 +131,6 @@ index 707bbe0..6ea77ec 100644
 +        );
 +    }
 +
+     static CONFIG_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+ 
+     struct ConfigStateTestGuard {

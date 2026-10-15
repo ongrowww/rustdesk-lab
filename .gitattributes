@@ -1,4 +1,5 @@
 * text=auto
+.github/patches/ongrow-support-desk-hbb-common.patch text eol=lf whitespace=-blank-at-eol
 src/ongrow_update/mod.rs text eol=lf
 src/ongrow_update/session_gate.rs text eol=lf
 src/ongrow_update/session_gate/macos.rs text eol=lf
